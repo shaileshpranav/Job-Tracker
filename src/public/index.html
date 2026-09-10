@@ -63,6 +63,7 @@
   aside header { padding:14px 14px 12px 18px; border-bottom:1px solid var(--line); display:flex; gap:6px; align-items:center; }
   aside header h1 { font-size:16px; margin:0; flex:1; }
   aside header h1::before { content:"◆"; color:var(--accent); margin-right:8px; font-size:12px; vertical-align:1px; }
+  .search { padding:10px 12px 0; } .search input { padding:6px 10px; font-size:13px; background:var(--panel-2); }
   .filters { display:flex; gap:4px; padding:10px 12px; flex-wrap:wrap; border-bottom:1px solid var(--line); }
   .filters button { padding:3px 10px; font-size:12px; border-radius:99px; }
   .filters button.on { background:var(--ink); color:var(--bg); border-color:var(--ink); }
@@ -167,6 +168,7 @@
 <div class="layout">
   <aside>
     <header><h1>Job Tracker</h1><button id="tasksBtn" class="icon" title="Tasks">⏱</button><button id="settingsBtn" class="icon" title="Settings">⚙</button><button class="primary" id="newBtn">+ New</button></header>
+    <div class="search"><input id="search" type="search" placeholder="Search company, role, location…" autocomplete="off"></div>
     <div class="filters" id="filters"></div>
     <div id="list"></div>
     <div id="llmFoot"><span id="llmFootText"></span><button id="themeBtn" class="ghost icon" title="Toggle dark mode">◐</button></div>

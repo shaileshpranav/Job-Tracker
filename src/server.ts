@@ -27,10 +27,15 @@ class HttpError extends Error {
 
 // ---------- helpers ----------
 
+const MAX_BODY = 8 * 1024 * 1024;
 async function readJson(req: http.IncomingMessage): Promise<any> {
   let body = "";
-  for await (const chunk of req) body += chunk;
-  return body ? JSON.parse(body) : {};
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > MAX_BODY) throw new HttpError(413, "Request body too large");
+  }
+  if (!body.trim()) return {};
+  try { return JSON.parse(body); } catch { throw new HttpError(400, "Body is not valid JSON"); }
 }
 function send(res: http.ServerResponse, status: number, body: unknown, type = "application/json") {
   res.writeHead(status, { "content-type": type, "cache-control": "no-store" });
@@ -262,6 +267,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   // static
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) return send(res, 200, fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8"), "text/html");
   if (req.method === "GET" && url.pathname === "/app.js") return send(res, 200, fs.readFileSync(path.join(PUBLIC, "app.js"), "utf8"), "text/javascript");
+  if (req.method === "GET" && url.pathname === "/favicon.ico") { res.writeHead(204); return res.end(); }
 
   // Bookmarklet: run on a job page in your normal (logged-in) browser. It opens
   // the app and POSTs the rendered page text here; the app page then picks it
@@ -290,7 +296,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if (m("GET", /^\/api\/captures\/latest$/)) {
     const cutoff = Date.now() - 2 * 60 * 1000;
     while (pendingCaptures.length && pendingCaptures[0].ts < cutoff) pendingCaptures.shift();
-    return send(res, 200, pendingCaptures.pop() ?? null);
+    return send(res, 200, pendingCaptures.shift() ?? null); // oldest first, so nothing is skipped
   }
 
   // Prompts
@@ -344,7 +350,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     for (const k of allowed) {
       if (!(k in body)) continue;
       if (k === "status" && !STATUSES.includes(body.status)) throw new HttpError(400, "Bad status");
-      const value = k === "requirements" ? JSON.stringify(Array.isArray(body.requirements) ? body.requirements : []) : body[k];
+      if ((k === "company" || k === "role") && !String(body[k] ?? "").trim()) throw new HttpError(400, `${k} cannot be empty`);
+      const value = k === "requirements" ? JSON.stringify(Array.isArray(body.requirements) ? body.requirements.map(String) : []) : body[k] === undefined ? null : body[k];
       db.prepare(`UPDATE applications SET ${k} = ? WHERE id = ?`).run(value, app.id);
       if (k === "description" && body.description !== app.description) db.prepare("UPDATE applications SET source_text = ? WHERE id = ?").run(body.description, app.id);
       if (k === "status" && body.status !== app.status) {
@@ -362,6 +369,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if ((r = m("DELETE", /^\/api\/applications\/(\d+)$/))) {
     const app = mustApp(r[1]);
+    // Its queued work is pointless now; keep finished history rows for reference.
+    db.prepare("UPDATE jobs SET status = 'cancelled', finished_at = datetime('now') WHERE application_id = ? AND status = 'queued'").run(app.id);
     db.prepare("DELETE FROM applications WHERE id = ?").run(app.id);
     return send(res, 200, { ok: true, folder: app.folder }); // files on disk are left alone
   }
@@ -386,6 +395,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if ((r = m("PUT", /^\/api\/documents\/(\d+)$/))) {
     const { content } = await readJson(req);
+    if (typeof content !== "string" || !content.trim()) throw new HttpError(400, "Document content is empty");
     const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(Number(r[1])) as any;
     if (!doc) throw new HttpError(404, "Document not found");
     db.prepare("UPDATE documents SET content = ?, tex = NULL WHERE id = ?").run(content, doc.id);
@@ -405,7 +415,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(Number(r[1])) as any;
     if (!doc) throw new HttpError(404, "Document not found");
     const body = await readJson(req);
-    db.prepare("UPDATE documents SET tex = ? WHERE id = ?").run(body.reset ? null : String(body.tex ?? ""), doc.id);
+    if (!body.reset && (typeof body.tex !== "string" || !body.tex.includes("\\begin{document}"))) throw new HttpError(400, "That doesn't look like a complete LaTeX document");
+    db.prepare("UPDATE documents SET tex = ? WHERE id = ?").run(body.reset ? null : body.tex, doc.id);
     touch(doc.application_id);
     const built = await buildPdf(doc.id).catch((e) => ({ error: e.message as string }));
     return send(res, 200, "error" in built ? { ok: false, error: built.error } : { ok: true, pages: built.pages });

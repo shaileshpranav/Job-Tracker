@@ -62,6 +62,10 @@ export function markdownToTex(md: string): TexDoc {
   let list: "itemize" | "enumerate" | null = null;
   const closeList = () => { if (list) { body.push(`\\end{${list}}`); list = null; } };
 
+  // No '# Name' heading? Treat the first non-empty line as the name.
+  const firstIdx = lines.findIndex((l) => l.trim());
+  if (firstIdx >= 0 && !/^#/.test(lines[firstIdx].trim())) lines[firstIdx] = `# ${lines[firstIdx].trim().replace(/^\*\*(.+)\*\*$/, "$1")}`;
+
   for (const raw of lines) {
     const line = raw.trimEnd();
     const h1 = /^#\s+(.*)/.exec(line), h2 = /^##\s+(.*)/.exec(line), h3 = /^###+\s+(.*)/.exec(line);
@@ -82,9 +86,10 @@ export function markdownToTex(md: string): TexDoc {
     closeList();
     if (!line.trim()) { body.push(""); continue; }
     if (/^\s*(---|\*\*\*)\s*$/.test(line)) { body.push("\\vspace{2pt}\\hrule\\vspace{2pt}"); continue; }
-    // '**Role — Company** Jan 2020 – Present'  ->  entry with right-aligned dates
+    // '**Role — Company** Jan 2020 – Present'  ->  entry with right-aligned dates.
+    // Only when the trailing text looks like a date range; '**Languages:** Python' stays a plain line.
     const bold = /^\*\*(.+?)\*\*\s*(.*)$/.exec(line.trim());
-    if (bold && bold[2] && !/[.:]$/.test(bold[2])) { body.push(entry(`${bold[1]} | ${bold[2]}`)); continue; }
+    if (bold && bold[2] && /\b(19|20)\d{2}\b|\b(present|current|now)\b/i.test(bold[2]) && bold[2].length < 60) { body.push(entry(`${bold[1]} | ${bold[2]}`)); continue; }
     body.push(`${inline(line.trim())}\\\\`);
   }
   closeList();

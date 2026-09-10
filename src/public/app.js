@@ -2,12 +2,12 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], seenJobs: new Set(), notice: null };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "" };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
   return esc(t).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*(?!\*)(.+?)\*/g, "$1<em>$2</em>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    .replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\[([^\]]+)\]\(((?:https?:\/\/|mailto:)[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 function mdToHtml(md) {
   const out = []; let list = null, para = [];
@@ -23,6 +23,14 @@ function mdToHtml(md) {
     else { close(); para.push(line.trim()); }
   }
   flush(); close(); return out.join("\n");
+}
+
+// SQLite timestamps are UTC without a zone marker; show them in local time.
+function fmtTime(s, withDate = true) {
+  if (!s) return "";
+  const d = new Date(s.includes("T") || s.endsWith("Z") ? s : s.replace(" ", "T") + "Z");
+  if (isNaN(d)) return s;
+  return withDate ? d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 async function api(method, url, body) {
@@ -45,14 +53,12 @@ async function run(label, fn) {
 
 // ---------- tasks (queue) ----------
 const activeJobs = () => state.jobs.filter((j) => j.status === "queued" || j.status === "running");
-const jobsFor = (appId, type) => activeJobs().filter((j) => j.application_id === appId && (!type || j.type === type));
 
 // POST to an endpoint that enqueues a job; shows a notice instead of blocking.
 async function enqueue(url, body, label) {
   state.err = null;
   try {
     const { job } = await api("POST", url, body);
-    state.seenJobs.add(job.id);
     await refreshJobs();
     const position = activeJobs().filter((j) => j.status === "queued" && j.id < job.id).length;
     notify(`${job.label} — ${job.status === "running" ? "started" : position ? `queued (${position} ahead)` : "queued"}`);
@@ -103,8 +109,9 @@ async function onJobFinished(j) {
 })();
 
 function jobRow(j, compact) {
-  const t = (s) => s ? s.replace("T", " ").slice(5, 16) : "";
-  const dur = j.started_at && j.finished_at ? `${Math.max(1, Math.round((Date.parse(j.finished_at + "Z") - Date.parse(j.started_at + "Z")) / 1000))}s` : "";
+  const t = (s) => fmtTime(s);
+  const secs = (a, b) => Math.max(1, Math.round((Date.parse(b.replace(" ", "T") + "Z") - Date.parse(a.replace(" ", "T") + "Z")) / 1000));
+  const dur = j.started_at && j.finished_at ? `${secs(j.started_at, j.finished_at)}s` : "";
   const icon = { queued: "◦", running: '<span class="spinner"></span>', done: '<span style="color:var(--ok)">✓</span>', error: '<span style="color:var(--bad)">✗</span>', cancelled: '<span class="muted">–</span>' }[j.status];
   return `<div class="job ${j.status}" data-job="${j.id}">
     <span class="job-icon">${icon}</span>
@@ -139,7 +146,7 @@ function jobBadge(appId, types) {
 async function loadList() { state.apps = await api("GET", "/api/applications"); }
 async function open(id) { state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = await api("GET", `/api/applications/${id}`); state.err = null; render(); }
 
-async function refresh() { await loadList(); if (state.sel) state.app = await api("GET", `/api/applications/${state.sel}`); render(); }
+async function refresh() { await loadList(); if (typeof state.sel === "number") state.app = await api("GET", `/api/applications/${state.sel}`); render(); }
 
 // ---------- render ----------
 function render() {
@@ -164,13 +171,14 @@ function renderSidebar() {
   for (const a of state.apps) counts[a.status] = (counts[a.status] || 0) + 1;
   $("#filters").innerHTML = ["all", ...STATUSES].filter((s) => s === "all" || counts[s])
     .map((s) => `<button data-f="${s}" class="${state.filter === s ? "on" : ""}">${s} ${counts[s] || 0}</button>`).join("");
-  const rows = state.apps.filter((a) => state.filter === "all" || a.status === state.filter);
+  const q = state.search.trim().toLowerCase();
+  const rows = state.apps.filter((a) => (state.filter === "all" || a.status === state.filter) && (!q || `${a.company} ${a.role} ${a.location || ""}`.toLowerCase().includes(q)));
   $("#list").innerHTML = rows.length ? rows.map((a) => `
     <div class="row ${a.id === state.sel ? "sel" : ""}" data-id="${a.id}">
       <b>${esc(a.company)}<span class="pill ${a.status}">${a.status}</span>${a.fit_score ? `<span class="pill fit f${a.fit_score}" title="Fit score">★ ${a.fit_score}</span>` : a.fit_status === "pending" ? `<span class="pill" title="Scoring fit…">★ …</span>` : ""}</b>
       <span>${esc(a.role)}</span><br>
       <small>${esc(a.location || "")}${a.applied_at ? ` · applied ${a.applied_at}` : ""}</small>
-    </div>`).join("") : `<div class="empty" style="padding:40px 0">No applications yet</div>`;
+    </div>`).join("") : `<div class="empty" style="padding:40px 0">${state.apps.length ? "No matches" : "No applications yet"}</div>`;
   const s = state.settings;
   $("#llmFootText").textContent = s ? `${s.provider} · ${s.model}` : "";
   const n = activeJobs().length;
@@ -179,8 +187,8 @@ function renderSidebar() {
 }
 
 const PROVIDER_HELP = {
-  anthropic: "Official Anthropic API. Key: ANTHROPIC_API_KEY in .env. Best results — native PDF reading, structured output, and a web-fetch fallback for scraper-blocked postings.",
-  openrouter: "Hundreds of models behind one key: OPENROUTER_API_KEY in .env. Model ids look like anthropic/claude-opus-5, openai/gpt-5, google/gemini-2.5-pro, meta-llama/llama-3.3-70b-instruct.",
+  anthropic: "Official Anthropic API. Best results — native PDF reading, guaranteed structured output, and a web-fetch fallback for scraper-blocked postings.",
+  openrouter: "Hundreds of models behind one key. Model ids look like anthropic/claude-opus-5, openai/gpt-5, google/gemini-2.5-pro, meta-llama/llama-3.3-70b-instruct. Free-tier models are often unreliable at structured output.",
   ollama: "Local models, no key, nothing leaves your Mac. Needs Ollama running (ollama serve) and a pulled model (ollama pull llama3.1). Slower; small models give rougher drafts.",
 };
 
@@ -300,11 +308,12 @@ function renderHome() {
   return `${busy()}${errBox()}${banner}
     <div class="card"><h2>How it works</h2>
       <ol>
-        <li><b>New</b> → paste a job posting URL (or the description). Claude extracts company, role, requirements and any application questions.</li>
-        <li><b>Generate</b> a tailored resume and cover letter from your base resume. Edit, then <i>Print / Save as PDF</i>.</li>
-        <li><b>Questions</b> → paste the form's questions; Claude drafts answers, reusing your previous answers where relevant.</li>
-        <li>Update the <b>status</b> as things move. Everything is also written to <code>applications/&lt;id-company-role&gt;/</code> as Markdown.</li>
+        <li><b>New</b> → paste a posting URL or its text (or use the bookmarklet below). The model extracts company, role, requirements and any application questions, then scores how well the role <b>fits</b> your base resume.</li>
+        <li><b>Generate</b> a one-page tailored resume and a cover letter. Preview, edit, or tweak the LaTeX, then <b>⬇ PDF</b>.</li>
+        <li><b>Questions</b> → paste the form's questions; answers are drafted from your profile and your previous answers.</li>
+        <li>Edit a document and hit <b>🎓 Learn my format</b> so future documents follow your formatting. Track <b>status</b> as things move; everything is mirrored to <code>applications/&lt;id-company-role&gt;/</code> as Markdown, TeX and PDF.</li>
       </ol>
+      <p class="muted">Long-running actions queue as <b>⏱ Tasks</b> and run in the background. Models, keys and prompts live in <b>⚙ Settings</b>.</p>
       ${p?.hasMarkdown ? `<p class="muted">Base resume: <code>profile/resume.md</code> ✓</p>` : ""}
     </div>
     <div class="card"><h3>Capture from your browser (LinkedIn, Workday, anything)</h3>
@@ -434,7 +443,7 @@ function renderDoc(a, kind) {
       </div></div>
       </div>` : ""}
     </div>
-    ${doc ? `<div class="doc-meta"><span class="v">v${docs.length}</span><span>${doc.created_at}</span><span>·</span>${sizeInfo}<div class="sp" style="flex:1"></div>${mode === "edit" ? `<button id="saveDoc" class="primary" data-doc="${doc.id}">Save edits</button>` : ""}</div>` : ""}
+    ${doc ? `<div class="doc-meta"><span class="v">v${docs.length}</span><span>${fmtTime(doc.created_at)}</span><span>·</span>${sizeInfo}<div class="sp" style="flex:1"></div>${mode === "edit" ? `<button id="saveDoc" class="primary" data-doc="${doc.id}">Save edits</button>` : ""}</div>` : ""}
     ${body}
   </div>`;
 }
@@ -454,7 +463,7 @@ function renderQuestions(a) {
 }
 
 function renderTimeline(a) {
-  return `<div class="card">${a.events.map((e) => `<div class="ev"><small>${e.created_at}</small><b>${esc(e.kind)}</b><span>${esc(e.detail)}</span></div>`).join("") || '<span class="muted">No events</span>'}</div>
+  return `<div class="card">${a.events.map((e) => `<div class="ev"><small>${fmtTime(e.created_at)}</small><b>${esc(e.kind)}</b><span>${esc(e.detail)}</span></div>`).join("") || '<span class="muted">No events</span>'}</div>
     <p class="muted">Files: <code>applications/${esc(a.folder)}/</code></p>`;
 }
 
@@ -462,9 +471,15 @@ const busy = () => state.busy ? `<div class="card"><span class="spinner"></span>
 const errBox = () => state.err ? `<div class="card err">${esc(state.err)}</div>` : "";
 
 // ---------- events ----------
-function bind() {
-  document.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { state.filter = b.dataset.f; render(); });
+function bindList() {
   document.querySelectorAll(".row").forEach((r) => r.onclick = () => open(Number(r.dataset.id)));
+  document.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { state.filter = b.dataset.f; render(); });
+}
+function bind() {
+  const sb = $("#search");
+  if (sb && sb.value !== state.search) sb.value = state.search;
+  if (sb) sb.oninput = () => { state.search = sb.value; renderSidebar(); bindList(); };
+  bindList();
   $("#newBtn").onclick = () => { state.sel = "new"; state.app = null; state.err = null; render(); };
   $("#settingsBtn").onclick = () => { state.sel = "settings"; state.app = null; state.err = null; render(); loadModels(state.settings.provider, true); };
   $("#homeBtn").onclick = () => { state.sel = "home"; state.app = null; state.err = null; render(); };
@@ -601,6 +616,13 @@ async function loadModels(provider, quiet) {
     if (!quiet) throw e;
   } finally { loading.delete(provider); }
 }
+
+// ⌘S / Ctrl+S saves whichever editor is open.
+document.addEventListener("keydown", (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s") return;
+  const btn = $("#saveDoc") || $("#texSave") || $("#eSave");
+  if (btn) { e.preventDefault(); btn.click(); }
+});
 
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
