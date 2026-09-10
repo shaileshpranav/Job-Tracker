@@ -43,7 +43,8 @@ class AnthropicLLM implements LLM {
 
   private text(msg: Anthropic.Beta.BetaMessage | Anthropic.Message) {
     if (msg.stop_reason === "refusal") throw new Error(`Claude declined: ${msg.stop_details?.explanation ?? "no explanation"}`);
-    return msg.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+    if (msg.stop_reason === "max_tokens") console.warn(`[anthropic] ${this.model}: output hit max_tokens`);
+    return cleanDoc(msg.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim());
   }
 
   async generate(system: string, user: string, maxTokens = 16000) {
@@ -91,7 +92,7 @@ class AnthropicLLM implements LLM {
 
 // ------------------------------------------------- OpenAI-compatible (shared)
 
-type ChatMessage = { role: "system" | "user"; content: string };
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 abstract class OpenAICompatLLM implements LLM {
   abstract readonly provider: Provider;
@@ -102,7 +103,7 @@ abstract class OpenAICompatLLM implements LLM {
   /** Provider-specific way to ask for schema-constrained JSON. */
   protected abstract jsonFormat(schema: object): object;
 
-  protected async chat(messages: ChatMessage[], extra: object = {}, maxTokens = 16000): Promise<string> {
+  protected async chat(messages: ChatMessage[], extra: object = {}, maxTokens = 8192): Promise<string> {
     const res = await fetch(this.endpoint(), {
       method: "POST",
       headers: { "content-type": "application/json", ...this.headers() },
@@ -112,15 +113,19 @@ abstract class OpenAICompatLLM implements LLM {
     const body: any = await res.json().catch(() => ({}));
     if (!res.ok || body.error) {
       const msg = body.error?.message ?? body.error ?? res.statusText;
-      throw new Error(`${this.provider} (${this.model}): ${typeof msg === "string" ? msg : JSON.stringify(msg)}`);
+      const text = typeof msg === "string" ? msg : JSON.stringify(msg);
+      // Some hosted models cap output well below our default; halve and retry once.
+      if (/max_tokens|maximum.*tokens|output.*limit/i.test(text) && maxTokens > 2048) return this.chat(messages, extra, Math.floor(maxTokens / 2));
+      throw new Error(`${this.provider} (${this.model}): ${text}`);
     }
+    if (body.choices?.[0]?.finish_reason === "length") console.warn(`[${this.provider}] ${this.model}: output hit max_tokens (${maxTokens})`);
     const content = body.choices?.[0]?.message?.content;
     if (typeof content !== "string") throw new Error(`${this.provider}: empty response`);
     return content.trim();
   }
 
-  generate(system: string, user: string, maxTokens?: number) {
-    return this.chat([{ role: "system", content: system }, { role: "user", content: user }], {}, maxTokens);
+  async generate(system: string, user: string, maxTokens?: number) {
+    return cleanDoc(await this.chat([{ role: "system", content: system }, { role: "user", content: user }], {}, maxTokens));
   }
 
   async structured<T>(system: string, user: string, schema: z.ZodType<T>, maxTokens?: number) {
@@ -136,9 +141,13 @@ abstract class OpenAICompatLLM implements LLM {
       return parseJson(raw, schema);
     } catch (e: any) {
       firstError = e;
-      if (raw === null && !/format|schema|json/i.test(e.message)) throw e;
+      if (raw === null && !/format|schema|json/i.test(e.message)) throw e; // a real request failure
     }
-    const retry = await this.chat([...messages, { role: "user", content: "Your previous reply was not valid JSON. Reply again with only the JSON object, correctly escaped." }], {}, maxTokens);
+    // raw === null: the provider rejected constrained decoding → plain retry.
+    // raw !== null: the model answered but the JSON was broken → show it its reply and ask again.
+    const retryMessages: ChatMessage[] = raw === null ? messages
+      : [...messages, { role: "assistant", content: raw }, { role: "user", content: "That was not valid JSON. Reply again with only the JSON object, correctly escaped, no code fences." }];
+    const retry = await this.chat(retryMessages, {}, maxTokens);
     try { return parseJson(retry, schema); } catch { throw firstError; }
   }
 
@@ -154,6 +163,24 @@ abstract class OpenAICompatLLM implements LLM {
   }
 
   async fetchUrlText() { return null; }
+}
+
+/**
+ * Models sometimes wrap a document in ```markdown fences or lead with
+ * "Here is the tailored resume:". Strip both so the Markdown is clean.
+ */
+export function cleanDoc(text: string): string {
+  let t = text.trim();
+  // Only unwrap when the whole document is one fenced block (opening fence on line 1, closing on the last).
+  const fence = /^```[a-z]*\s*\n([\s\S]*)\n```\s*$/i.exec(t);
+  if (fence && !/^```/m.test(fence[1])) t = fence[1].trim();
+  else if (/^```[a-z]*\s*\n/i.test(t) && !/\n```\s*$/.test(t)) t = t.replace(/^```[a-z]*\s*\n/i, "").trim(); // unclosed opening fence
+  // Drop a one-line preamble if the real document starts with a heading right after it.
+  const lines = t.split("\n");
+  if (lines.length > 2 && !lines[0].startsWith("#") && /^(here|below|sure|certainly|this is|i'?ve)/i.test(lines[0]) && lines.slice(1, 4).some((l) => l.startsWith("#"))) {
+    t = lines.slice(lines.findIndex((l, i) => i > 0 && l.startsWith("#"))).join("\n");
+  }
+  return t;
 }
 
 function parseJson<T>(raw: string, schema: z.ZodType<T>): T {

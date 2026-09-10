@@ -66,8 +66,11 @@ export function saveTaskRoute(task: Task, route: Route | null) {
 
 /** Effective LLM config: app-saved settings win, then .env, then defaults. */
 export function llmSettings() {
-  const provider = (get("provider") ?? process.env.LLM_PROVIDER ?? "anthropic") as Provider;
-  const model = get(`model:${provider}`) ?? process.env.LLM_MODEL ?? DEFAULT_MODEL[provider];
+  const envProvider = (PROVIDERS as readonly string[]).includes(process.env.LLM_PROVIDER ?? "") ? (process.env.LLM_PROVIDER as Provider) : "anthropic";
+  const provider = (get("provider") ?? envProvider) as Provider;
+  // LLM_MODEL only makes sense for the provider it was written for.
+  const envModel = provider === envProvider ? process.env.LLM_MODEL : undefined;
+  const model = get(`model:${provider}`) ?? envModel ?? DEFAULT_MODEL[provider];
   const tasks = Object.fromEntries(
     Object.keys(TASKS).map((t) => { const v = get(`task:${t}`); return [t, v ? (JSON.parse(v) as Route) : null]; }),
   ) as Record<Task, Route | null>;
