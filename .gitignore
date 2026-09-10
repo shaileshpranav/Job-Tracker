@@ -1,0 +1,8 @@
+node_modules/
+.env
+data/
+applications/
+profile/*
+!profile/.gitkeep
+!profile/README.md
+.DS_Store

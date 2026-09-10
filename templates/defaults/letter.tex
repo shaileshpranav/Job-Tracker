@@ -1,0 +1,21 @@
+% Cover-letter template. Placeholders: NAME, CONTACT, DATE, BODY.
+\documentclass[11pt,letterpaper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fontspec}
+\IfFontExistsTF{Helvetica Neue}{\setmainfont{Helvetica Neue}}{\IfFontExistsTF{Helvetica}{\setmainfont{Helvetica}}{\setmainfont{Latin Modern Sans}}}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{8pt}
+\linespread{1.15}
+\setlist[itemize]{leftmargin=14pt,nosep,itemsep=2pt}
+\newcommand{\entry}[2]{\par{\textbf{#1}\hfill{#2}}\par}
+\begin{document}
+{\large\bfseries {{NAME}}}\\
+{\small {{CONTACT}}}
+
+\vspace{6pt}{{DATE}}
+
+{{BODY}}
+\end{document}
