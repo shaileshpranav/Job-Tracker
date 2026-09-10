@@ -1,0 +1,27 @@
+% Resume template. Placeholders: NAME, CONTACT, BODY are filled from
+% the Markdown by src/latex.ts. Edit freely — compiled with xelatex.
+\documentclass[10.5pt,letterpaper]{article}
+\usepackage[margin=0.55in,top=0.5in,bottom=0.5in]{geometry}
+\usepackage{fontspec}
+\IfFontExistsTF{Helvetica Neue}{\setmainfont{Helvetica Neue}}{\IfFontExistsTF{Helvetica}{\setmainfont{Helvetica}}{\setmainfont{Latin Modern Sans}}}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{1.5pt}
+\linespread{1.02}
+\titleformat{\section}{\vspace{2pt}\normalsize\bfseries\MakeUppercase}{}{0em}{}[\vspace{-7pt}\rule{\textwidth}{0.5pt}\vspace{-2pt}]
+\titlespacing*{\section}{0pt}{7pt}{3pt}
+\setlist[itemize]{leftmargin=13pt,nosep,itemsep=0.8pt,topsep=1pt,partopsep=0pt,label=\textbullet}
+\setlist[enumerate]{leftmargin=16pt,nosep,itemsep=0.8pt,topsep=1pt}
+\newcommand{\entry}[2]{\par\vspace{2.5pt}{\textbf{#1}\hfill{\small #2}}\par}
+\begin{document}
+\begin{center}
+{\LARGE\bfseries {{NAME}}}\\[3pt]
+{\small {{CONTACT}}}
+\end{center}
+\vspace{-4pt}
+{{BODY}}
+\end{document}
