@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "" };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
@@ -52,7 +52,9 @@ async function run(label, fn) {
 }
 
 // ---------- tasks (queue) ----------
-const activeJobs = () => state.jobs.filter((j) => j.status === "queued" || j.status === "running");
+const activeJobs = () => state.jobs.filter((j) => j.status === "queued" || j.status === "running" || j.status === "waiting");
+const waitingJobs = () => state.jobs.filter((j) => j.status === "waiting");
+const needOf = (j) => { try { return JSON.parse(j.need || "{}"); } catch { return {}; } };
 
 // POST to an endpoint that enqueues a job; shows a notice instead of blocking.
 async function enqueue(url, body, label) {
@@ -73,7 +75,9 @@ async function refreshJobs() {
   state.jobs = await api("GET", "/api/jobs").catch(() => state.jobs);
   for (const j of state.jobs) {
     const was = prev.get(j.id);
-    if (was && (was === "queued" || was === "running") && (j.status === "done" || j.status === "error")) await onJobFinished(j);
+    if (!was) continue;
+    if ((was === "queued" || was === "running") && (j.status === "done" || j.status === "error")) await onJobFinished(j);
+    else if (was !== "waiting" && j.status === "waiting") notify(`⚠ ${j.label} needs you — ${needOf(j).reason || "see Tasks"}`);
   }
 }
 
@@ -112,11 +116,11 @@ function jobRow(j, compact) {
   const t = (s) => fmtTime(s);
   const secs = (a, b) => Math.max(1, Math.round((Date.parse(b.replace(" ", "T") + "Z") - Date.parse(a.replace(" ", "T") + "Z")) / 1000));
   const dur = j.started_at && j.finished_at ? `${secs(j.started_at, j.finished_at)}s` : "";
-  const icon = { queued: "◦", running: '<span class="spinner"></span>', done: '<span style="color:var(--ok)">✓</span>', error: '<span style="color:var(--bad)">✗</span>', cancelled: '<span class="muted">–</span>' }[j.status];
+  const icon = { queued: "◦", running: '<span class="spinner"></span>', waiting: '<span style="color:var(--warn)">⚠</span>', done: '<span style="color:var(--ok)">✓</span>', error: '<span style="color:var(--bad)">✗</span>', cancelled: '<span class="muted">–</span>' }[j.status];
   return `<div class="job ${j.status}" data-job="${j.id}">
     <span class="job-icon">${icon}</span>
     <div class="job-main"><b>${esc(j.label)}</b>
-      <div class="muted">${j.status === "running" ? esc(j.progress || "Working…") : j.status === "queued" ? "Queued" : j.status === "error" ? `<span class="err">${esc(j.error || "failed")}</span>` : j.status}${dur ? ` · ${dur}` : ""}${compact ? "" : ` · ${t(j.created_at)}`}</div></div>
+      <div class="muted">${j.status === "running" ? esc(j.progress || "Working…") : j.status === "queued" ? "Queued" : j.status === "waiting" ? `<span style="color:var(--warn)">Waiting for you — ${esc(needOf(j).reason || "needs input")}</span>` : j.status === "error" ? `<span class="err">${esc(j.error || "failed")}</span>` : j.status}${dur ? ` · ${dur}` : ""}${compact ? "" : ` · ${t(j.created_at)}`}</div></div>
     <div class="job-actions">
       ${j.application_id ? `<button class="ghost" data-job-open="${j.application_id}" title="Open application">↗</button>` : ""}
       ${j.status === "queued" || j.status === "running" ? `<button data-job-cancel="${j.id}">Cancel</button>` : ""}
@@ -124,8 +128,34 @@ function jobRow(j, compact) {
     </div></div>`;
 }
 
+/**
+ * A task parked on a human-verification check. The app never tries to pass the
+ * check itself — you open the page, clear it, and hand the page back.
+ */
+function renderNeedsYou() {
+  return waitingJobs().map((j) => {
+    const n = needOf(j);
+    const open = state.pasteFor === j.id;
+    return `<div class="card needs" data-need="${j.id}">
+      <div class="toolbar" style="margin-bottom:6px"><h3 style="margin:0">⚠ ${esc(j.label)} needs you</h3><div class="sp"></div><span class="muted">${esc(n.host || "")}</span></div>
+      <p style="margin:0 0 10px">${esc(n.message || "This task is waiting for input.")} Open the posting, clear the check yourself, then hand the page over — the app doesn't try to get past these.</p>
+      <div class="toolbar" style="margin:0">
+        ${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener"><button class="primary">Open the posting ↗</button></a>` : ""}
+        <button data-resume="${j.id}">I've cleared it — try again</button>
+        <button data-paste="${j.id}" class="${open ? "on" : ""}">Paste the page text</button>
+        <div class="sp"></div>
+        <button class="ghost" data-job-cancel="${j.id}">Cancel task</button>
+      </div>
+      ${open ? `<div style="margin-top:10px">
+        <textarea id="pasteText" placeholder="Select the whole posting page (⌘A, ⌘C) and paste it here…" style="min-height:140px"></textarea>
+        <div class="toolbar" style="margin:8px 0 0"><button class="primary" data-paste-save="${j.id}">Use this text</button><span class="muted">Or click the 📌 bookmarklet on the cleared page — it resumes this task automatically.</span></div>
+      </div>` : `<p class="muted" style="margin:8px 0 0">Tip: with the 📌 Save to Job Tracker bookmarklet on your bookmarks bar, one click on the cleared page hands it over and resumes this task.</p>`}
+    </div>`;
+  }).join("");
+}
+
 function renderTasks() {
-  const active = activeJobs(), past = state.jobs.filter((j) => !active.includes(j));
+  const active = activeJobs().filter((j) => j.status !== "waiting"), past = state.jobs.filter((j) => j.status !== "waiting" && !active.includes(j));
   return `${errBox()}
     <div class="card"><div class="toolbar"><h2 style="margin:0">Tasks</h2><div class="sp"></div><span class="muted">${active.length ? `${active.length} active` : "idle"} · runs one at a time</span></div>
       ${active.length ? active.map((j) => jobRow(j)).join("") : '<p class="muted">Nothing running. Actions like Capture, Generate, Fit score and Draft answers queue here and run in the background — you can keep working meanwhile.</p>'}
@@ -137,7 +167,7 @@ function renderTasks() {
 
 // Inline status for the current application on a tab.
 function jobBadge(appId, types) {
-  const js = activeJobs().filter((j) => j.application_id === appId && types.includes(j.type));
+  const js = activeJobs().filter((j) => j.application_id === appId && j.status !== "waiting" && types.includes(j.type));
   if (!js.length) return "";
   return `<div class="banner working"><span class="spinner"></span>${js.map((j) => `<b>${esc(j.label)}</b> — ${j.status === "running" ? esc(j.progress || "working…") : "queued"}`).join(" · ")}</div>`;
 }
@@ -155,7 +185,7 @@ function render() {
   // On phones the list and the detail are separate screens; body.detail picks which.
   document.body.classList.toggle("detail", state.sel !== null);
   const back = `<button class="back" id="backBtn">← Applications</button>`;
-  const notice = state.notice ? `<div class="notice">${esc(state.notice)}</div>` : "";
+  const notice = (state.notice ? `<div class="notice">${esc(state.notice)}</div>` : "") + renderNeedsYou();
   if (state.sel === "tasks") main.innerHTML = back + notice + renderTasks();
   else if (state.sel === "new") main.innerHTML = back + notice + renderNew();
   else if (state.sel === "settings") main.innerHTML = back + notice + renderSettings();
@@ -533,6 +563,13 @@ function bind() {
   $("#clearJobs") && ($("#clearJobs").onclick = async () => { await api("DELETE", "/api/jobs"); await refreshJobs(); render(); });
   document.querySelectorAll("[data-job-cancel]").forEach((b) => b.onclick = async () => { await api("POST", `/api/jobs/${b.dataset.jobCancel}/cancel`); await refreshJobs(); render(); });
   document.querySelectorAll("[data-job-retry]").forEach((b) => b.onclick = async () => { await api("POST", `/api/jobs/${b.dataset.jobRetry}/retry`); await refreshJobs(); render(); });
+  document.querySelectorAll("[data-resume]").forEach((b) => b.onclick = () => run("Trying again…", async () => { await api("POST", `/api/jobs/${b.dataset.resume}/resume`, {}); state.pasteFor = null; await refreshJobs(); }));
+  document.querySelectorAll("[data-paste]").forEach((b) => b.onclick = () => { state.pasteFor = state.pasteFor === Number(b.dataset.paste) ? null : Number(b.dataset.paste); render(); $("#pasteText")?.focus(); });
+  document.querySelectorAll("[data-paste-save]").forEach((b) => b.onclick = () => {
+    const text = $("#pasteText").value;
+    if (text.trim().length < 200) { state.err = "That looks too short — paste the whole posting page."; render(); return; }
+    run("Reading the page you pasted…", async () => { await api("POST", `/api/jobs/${b.dataset.pasteSave}/resume`, { text }); state.pasteFor = null; await refreshJobs(); });
+  });
   document.querySelectorAll("[data-job-open]").forEach((b) => b.onclick = () => open(Number(b.dataset.jobOpen)));
   $("#bookmarklet") && api("GET", "/api/bookmarklet").then(({ href }) => {
     const a = $("#bookmarklet"); if (!a) return;
@@ -633,6 +670,11 @@ function captureFromBrowser(d) {
   if (captured) return;
   captured = true;
   history.replaceState(null, "", "/");
+  if (d.resumed_job) { // this page cleared a check a parked task was waiting on
+    state.sel = "tasks"; state.app = null; state.busy = null;
+    refreshJobs().then(() => notify(`✓ Handed over — “${d.label || "task"}” resumed`));
+    return;
+  }
   state.sel = "new"; state.app = null; state.busy = null;
   enqueue("/api/applications", { url: d.url, title: d.title, description: String(d.text || "").trim() });
 }

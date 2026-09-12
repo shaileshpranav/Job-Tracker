@@ -46,6 +46,15 @@ Requires Node 22.6+ (uses built-in SQLite and TypeScript type-stripping — no b
 
 On first visit, click **Import resume** to convert your PDF/DOCX into `profile/resume.md`. That Markdown file is the source of truth for all tailoring — edit it to improve every future document. Optional `profile/notes.md` for anything else Claude should know (goals, tone, things to emphasise).
 
+## When a site asks for a human
+
+Some postings sit behind a Cloudflare check, a CAPTCHA, or a sign-in wall. The app **never tries to solve or bypass these**. It detects the challenge, parks the task as **waiting**, and shows a card with the site and the reason. You open the posting in your own browser, clear the check yourself, then hand the page over either way:
+
+- click the 📌 **Save to Job Tracker** bookmarklet on the cleared page — the waiting task for that site resumes automatically with what you saw, or
+- paste the page text into the card.
+
+There is also **I've cleared it — try again**, which simply re-fetches (useful after a rate limit passes). The page text you hand over is stored with the task, so a retry does not need to fetch again.
+
 ## Tasks queue
 
 Every model-backed action — capture, re-extract, fit score, resume/cover letter, condense, answers, resume import — is queued as a **task** and runs in the background, one at a time (set `JOB_CONCURRENCY=2` in `.env` to allow more if you're on hosted models). Buttons return instantly; the ⏱ button shows how many tasks are active and opens the Tasks panel with live progress, history, **Cancel** (queued tasks stop immediately; running ones stop at their next step) and **Retry**. The tab you're on shows an inline "working…" banner for its own tasks, and the app refreshes itself when a task finishes. Tasks are stored in SQLite, so a queue survives a restart (anything mid-flight when the server stopped is marked failed for retry).
