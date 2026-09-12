@@ -3,11 +3,11 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
-import { captureFromUrl } from "./scrape.ts";
+import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
 import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, resumeSize, ONE_PAGE, type JobExtract } from "./ai.ts";
 import { compilePdf, compileTex, latexAvailable, renderTex, markdownToTex, contentHash, readTemplate, writeTemplate } from "./latex.ts";
 import { listPrompts, savePrompt } from "./prompts.ts";
-import { registerJob, enqueue, listJobs, getJob, cancelJob, retryJob, clearFinishedJobs, type Progress } from "./queue.ts";
+import { registerJob, enqueue, listJobs, getJob, cancelJob, retryJob, resumeJob, resumeMatching, clearFinishedJobs, NeedsYou, type Progress } from "./queue.ts";
 import { loadResume, loadNotes, profileStatus } from "./profile.ts";
 import { printPage } from "./markdown.ts";
 import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, type Provider, type Task, type StyleKind } from "./settings.ts";
@@ -18,7 +18,7 @@ const HOST = process.env.HOST ?? "0.0.0.0"; // reachable from your phone on the 
 const PUBLIC = path.join(import.meta.dirname, "public");
 
 /** Page text handed over by the bookmarklet, waiting for the app page to claim it. */
-const pendingCaptures: { ts: number; url: string; title: string; text: string }[] = [];
+const pendingCaptures: { ts: number; url: string; title: string; text: string; resumed_job?: number; label?: string }[] = [];
 
 class HttpError extends Error {
   status: number;
@@ -106,13 +106,35 @@ function fitInBackground(appId: number) {
   enqueue("fit", `Fit score — ${app.company}`, {}, appId);
 }
 
+const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+
+/**
+ * Fetch a posting, or park the job and ask the user to open the page. We never
+ * attempt to solve or bypass a verification check — the user passes it in their
+ * own browser and hands the page over (bookmarklet or paste).
+ */
+async function captureOrAsk(url: string, verifiedText?: string) {
+  try {
+    return await captureFromUrl(url, verifiedText);
+  } catch (e) {
+    if (!(e instanceof CaptureBlocked)) throw e;
+    throw new NeedsYou({
+      type: "verify",
+      url: e.url,
+      host: hostOf(e.url) || e.url,
+      reason: e.reason,
+      message: `${hostOf(e.url) || "The site"} needs a human: ${e.reason}.`,
+    });
+  }
+}
+
 // ---------- job handlers (the actual work; routes only enqueue) ----------
 
 registerJob("capture", async (body, _job, progress) => {
   let job: JobExtract, sourceText: string;
   if (body.url && !body.description) {
-    progress("Fetching the posting…");
-    ({ source_text: sourceText, ...job } = await captureFromUrl(body.url.trim()));
+    progress(body.verified_text ? "Reading the page you verified…" : "Fetching the posting…");
+    ({ source_text: sourceText, ...job } = await captureOrAsk(body.url.trim(), body.verified_text));
   } else if (body.description) {
     // Manual paste / bookmarklet: still run extraction so requirements/questions get structured.
     progress("Extracting job details…");
@@ -126,13 +148,13 @@ registerJob("capture", async (body, _job, progress) => {
   return { application_id: app.id, company: app.company, role: app.role };
 });
 
-registerJob("reextract", async ({ source = "description" }, job, progress) => {
+registerJob("reextract", async ({ source = "description", verified_text }, job, progress) => {
   const app = mustApp(String(job.application_id));
   let extracted: JobExtract, sourceText = app.source_text;
   if (source === "url") {
     if (!app.url) throw new Error("This application has no posting URL");
-    progress("Fetching the posting again…");
-    ({ source_text: sourceText, ...extracted } = await captureFromUrl(app.url));
+    progress(verified_text ? "Reading the page you verified…" : "Fetching the posting again…");
+    ({ source_text: sourceText, ...extracted } = await captureOrAsk(app.url, verified_text));
   } else {
     const text = app.source_text?.trim() || app.description?.trim();
     if (!text) throw new Error("Nothing to extract from — edit the job and paste a description first");
@@ -289,9 +311,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if (m("POST", /^\/api\/captures$/)) {
     const body = await readJson(req);
     if (typeof body.text !== "string" || !body.text.trim()) throw new HttpError(400, "No page text");
-    pendingCaptures.push({ ts: Date.now(), url: String(body.url ?? ""), title: String(body.title ?? ""), text: body.text });
+    const url = String(body.url ?? ""), title = String(body.title ?? "");
+    // If a task is parked on this site waiting for you to pass a check, this
+    // page is what it was waiting for — resume it instead of starting over.
+    const resumed = resumeMatching((need) => (need.type === "verify" && need.host && hostOf(url) === need.host ? { verified_text: body.text } : null));
+    pendingCaptures.push({ ts: Date.now(), url, title, text: resumed ? "" : body.text, resumed_job: resumed?.id, label: resumed?.label });
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-    return res.end(JSON.stringify({ ok: true }));
+    return res.end(JSON.stringify({ ok: true, resumed: resumed?.id ?? null }));
   }
   if (m("GET", /^\/api\/captures\/latest$/)) {
     const cutoff = Date.now() - 2 * 60 * 1000;
@@ -329,6 +355,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if ((r = m("GET", /^\/api\/jobs\/(\d+)$/))) { const j = getJob(Number(r[1])); if (!j) throw new HttpError(404, "Job not found"); return send(res, 200, j); }
   if ((r = m("POST", /^\/api\/jobs\/(\d+)\/cancel$/))) { const j = cancelJob(Number(r[1])); if (!j) throw new HttpError(404, "Job not found"); return send(res, 200, j); }
   if ((r = m("POST", /^\/api\/jobs\/(\d+)\/retry$/))) return send(res, 202, { job: retryJob(Number(r[1])) });
+  if ((r = m("POST", /^\/api\/jobs\/(\d+)\/resume$/))) {
+    const { text } = await readJson(req);
+    const patch = typeof text === "string" && text.trim() ? { verified_text: text.trim() } : {};
+    return send(res, 202, { job: resumeJob(Number(r[1]), patch) });
+  }
   if (m("DELETE", /^\/api\/jobs$/)) { clearFinishedJobs(); return send(res, 200, { ok: true }); }
 
   // applications
