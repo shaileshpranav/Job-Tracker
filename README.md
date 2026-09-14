@@ -94,7 +94,13 @@ profile/        resume.pdf|docx  → resume.md (generated), notes.md (optional)
 data/           tracker.db (SQLite)
 applications/   001-company-role/{job.md, resume.md, cover-letter.md, questions.md}
 src/
-  server.ts     HTTP + JSON API
+  server.ts     HTTP routes + JSON API
+  auth.ts       optional login (session cookies, backoff); public/login.html
+  http.ts       request helpers
+  jobs.ts       background job handlers (capture, fit, generate, answers, …)
+  documents.ts  per-application files: job.md, questions.md, LaTeX/PDF builds
+  goals.ts      targets, streaks, XP, achievements
+  crypto.ts     at-rest encryption for saved keys, password hashing
   queue.ts      persistent task queue + worker
   ai.ts         prompt assembly (extraction, tailoring, answers)
   prompts.ts    default prompt text + user overrides

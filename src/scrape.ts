@@ -41,7 +41,7 @@ export function htmlToText(html: string): string {
   return decodeEntities(html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<(nav|footer|header|svg)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<(nav|footer|svg|noscript)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<br\s*\/?>|<\/(p|div|li|h\d|tr)>/gi, "\n")
     .replace(/<[^>]+>/g, " "))
     .replace(/[ \t]+/g, " ")

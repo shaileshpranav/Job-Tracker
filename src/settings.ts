@@ -132,14 +132,22 @@ export function authRequired(): boolean {
   return authStatus().enabled;
 }
 export function verifyAuthPassword(password: string): boolean {
+  const pw = password.trim(); // stored passwords are trimmed too
   const hash = get("auth:passwordHash");
-  if (hash) return verifyPassword(password, hash);
-  if (process.env.AUTH_PASSWORD) return timingSafeEqualStr(password, process.env.AUTH_PASSWORD);
+  if (hash) return verifyPassword(pw, hash);
+  if (process.env.AUTH_PASSWORD) return timingSafeEqualStr(pw, process.env.AUTH_PASSWORD.trim());
   return false;
 }
+/** Changes with every password set/clear so existing sessions stop verifying. */
+export function authGeneration(): string {
+  return `${get("auth:generation") ?? "0"}:${get("auth:passwordHash") ? "app" : process.env.AUTH_PASSWORD ? "env" : "none"}`;
+}
 export function setAuthPassword(password: string | null) {
-  if (password === null) { del("auth:passwordHash"); return authStatus(); }
-  if (password.trim().length < 8) throw new Error("Password must be at least 8 characters");
-  set("auth:passwordHash", hashPassword(password.trim()));
+  if (password === null) del("auth:passwordHash");
+  else {
+    if (password.trim().length < 8) throw new Error("Password must be at least 8 characters");
+    set("auth:passwordHash", hashPassword(password.trim()));
+  }
+  set("auth:generation", String(Number(get("auth:generation") ?? "0") + 1));
   return authStatus();
 }
