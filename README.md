@@ -28,6 +28,10 @@ Follows your system light/dark setting; the ◐ button at the bottom of the side
 
 The UI is responsive — on a phone the list and the application detail become separate screens with a back button. The server listens on all interfaces by default, so with your phone on the same Wi-Fi, open the "on your phone" URL that `npm start` prints (e.g. `http://192.168.0.109:4321`). Add it to your home screen from Safari's share sheet for an app-like experience. To keep the server local-only, set `HOST=127.0.0.1` in `.env`.
 
+## Security
+
+The server has no login by default and listens on all interfaces, so on shared Wi-Fi anyone on the network can open it. Set `AUTH_PASSWORD` in `.env`, or add a password from **⚙ Settings → Security** once it's running, to require one — a session then lasts 30 days per browser (**⎋** in the sidebar logs out). Saved LLM API keys are encrypted at rest in `data/tracker.db` with a key generated on first run at `data/secret.key`; back both files up together, since losing the key file just means re-pasting keys in Settings, not losing the tracker data.
+
 ## Choosing a model
 
 Open **⚙ Settings** in the app: pick a provider, paste its API key (stored locally in `data/tracker.db`, takes effect immediately), and choose a model from the searchable list. `.env` values (`LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_HOST`) act as defaults; anything set in the app wins.
@@ -54,6 +58,16 @@ Some postings sit behind a Cloudflare check, a CAPTCHA, or a sign-in wall. The a
 - paste the page text into the card.
 
 There is also **I've cleared it — try again**, which simply re-fetches (useful after a rate limit passes). The page text you hand over is stored with the task, so a retry does not need to fetch again.
+
+## Goals, streaks and achievements
+
+The 🎯 bar under the sidebar header shows today's progress and your streak; click it for the **Goals** view. Set targets per day / week / month (0 = ignore) and whether weekends count — with weekends off, Saturday and Sunday are rest days that don't break a streak. Everything is derived from each application's **applied** date (set automatically when you move a card to *applied*, or edit it in the header), so correcting a date recomputes it all.
+
+- **Rings** for today, this week (Mon–Sun) and this month.
+- **Streak** — consecutive days hitting the daily target (still alive if yesterday hit and today is in progress); best streak is kept.
+- **XP and levels** — 10 per application, +25 per daily goal, +75 per weekly, +200 per monthly, +5 per streak day. Rookie → Applicant → Contender → Hunter → Closer → Relentless → Unstoppable → Legend.
+- **Heatmap** of the last 16 weeks.
+- **Achievements** for milestones (first application, power day, streaks of 3/7/14/30, weekly and monthly wins, 10/25/50/100 sent, five 4+-fit applications, reaching screening / interview / offer, levels 3 and 5). Unlocks are announced as they happen.
 
 ## Tasks queue
 

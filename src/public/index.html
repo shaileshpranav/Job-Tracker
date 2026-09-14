@@ -113,6 +113,38 @@
   .back, .mobile-only { display:none; }
   #tasksBtn.active { border-color:var(--accent); color:var(--accent); }
 
+  /* goals */
+  .goal-mini { display:flex; align-items:center; gap:8px; margin:10px 12px 0; padding:8px 10px; border:1px solid var(--line); border-radius:var(--radius-s); background:var(--panel-2); cursor:pointer; font-size:12px; }
+  .goal-mini:hover { border-color:var(--mute); } .goal-mini.met { border-color:var(--ok); }
+  .goal-bar { flex:1; height:6px; background:var(--line); border-radius:99px; overflow:hidden; } .goal-bar div { height:100%; background:var(--accent); border-radius:99px; transition:width .3s; }
+  .goal-mini.met .goal-bar div { background:var(--ok); }
+  .streak-mini { color:var(--mute); } .streak-mini.hot { color:var(--warn); font-weight:600; }
+  .grid3 { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; }
+  .lvl-badge { width:48px; height:48px; border-radius:14px; background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:20px; margin-right:12px; box-shadow:var(--shadow); }
+  .xp { height:8px; background:var(--line); border-radius:99px; overflow:hidden; margin-top:14px; } .xp div { height:100%; background:linear-gradient(90deg, var(--accent), var(--ok)); border-radius:99px; transition:width .4s; }
+  .streak { display:flex; align-items:center; gap:8px; padding:8px 14px; border:1px solid var(--line); border-radius:var(--radius-s); background:var(--panel-2); }
+  .streak span { font-size:22px; filter:grayscale(1); opacity:.5; } .streak.hot span { filter:none; opacity:1; }
+  .streak b { font-size:22px; } .streak small { color:var(--mute); line-height:1.2; }
+  .rings { display:flex; gap:28px; justify-content:space-around; flex-wrap:wrap; }
+  .ring-wrap { display:flex; flex-direction:column; align-items:center; gap:6px; } .ring-label { text-align:center; } .ring-label b { display:block; } .ring-label small { color:var(--mute); }
+  .ring { position:relative; } .ring svg { width:100%; height:100%; transform:rotate(-90deg); }
+  .ring-bg { fill:none; stroke:var(--line); stroke-width:7; } .ring-fg { fill:none; stroke:var(--accent); stroke-width:7; stroke-linecap:round; transition:stroke-dashoffset .5s; }
+  .ring.met .ring-fg { stroke:var(--ok); }
+  .ring-text { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1; } .ring-text b { font-size:22px; } .ring-text small { color:var(--mute); margin-top:3px; }
+  .heat-wrap { overflow-x:auto; } .heat { display:flex; gap:3px; } .heat-col { display:flex; flex-direction:column; gap:3px; }
+  .heat-months { display:flex; gap:3px; margin-bottom:4px; font-size:10px; color:var(--mute); } .heat-months span { width:14px; overflow:visible; white-space:nowrap; }
+  .heat-cell { width:14px; height:14px; border-radius:3px; background:var(--line-2); }
+  .heat-cell.rest { background:transparent; border:1px dashed var(--line); }
+  .heat-cell.l1 { background:color-mix(in srgb, var(--accent) 35%, var(--line-2)); } .heat-cell.l2 { background:color-mix(in srgb, var(--accent) 65%, var(--line-2)); } .heat-cell.l3 { background:var(--ok); }
+  .heat-cell.today { outline:2px solid var(--ink); outline-offset:1px; } .heat-cell.inline { display:inline-block; vertical-align:middle; margin:0 2px; }
+  .badges { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
+  .badge { border:1px solid var(--line); border-radius:var(--radius-s); padding:12px; text-align:center; opacity:.45; filter:grayscale(1); background:var(--panel-2); }
+  .badge.on { opacity:1; filter:none; border-color:var(--ok); background:var(--ok-soft); }
+  .badge-icon { font-size:26px; display:block; margin-bottom:4px; } .badge b { display:block; font-size:13px; } .badge small { color:var(--mute); font-size:11px; }
+  .notice.celebrate { background:var(--ok); color:#fff; font-weight:600; animation:pop .4s ease-out; }
+  @keyframes pop { 0% { transform:scale(.9); opacity:0; } 60% { transform:scale(1.03); } 100% { transform:scale(1); opacity:1; } }
+  @media (max-width:768px) { .grid3 { grid-template-columns:1fr; } .rings { gap:12px; } }
+
   /* document toolbar */
   .doc-actions { display:flex; flex-wrap:wrap; gap:8px 18px; align-items:flex-end; padding-bottom:12px; border-bottom:1px solid var(--line-2); margin-bottom:12px; }
   .doc-group { display:flex; flex-direction:column; gap:5px; } .doc-group > span { font-size:11px; font-weight:500; color:var(--mute); text-transform:uppercase; letter-spacing:.06em; }
@@ -170,10 +202,11 @@
 <div class="layout">
   <aside>
     <header><h1>Job Tracker</h1><button id="tasksBtn" class="icon" title="Tasks">⏱</button><button id="settingsBtn" class="icon" title="Settings">⚙</button><button class="primary" id="newBtn">+ New</button></header>
+    <div id="goalWidget"></div>
     <div class="search"><input id="search" type="search" placeholder="Search company, role, location…" autocomplete="off"></div>
     <div class="filters" id="filters"></div>
     <div id="list"></div>
-    <div id="llmFoot"><span id="llmFootText"></span><button id="themeBtn" class="ghost icon" title="Toggle dark mode">◐</button></div>
+    <div id="llmFoot"><span id="llmFootText"></span><button id="logoutBtn" class="ghost icon" title="Log out" hidden>⎋</button><button id="themeBtn" class="ghost icon" title="Toggle dark mode">◐</button></div>
     <div class="mobile-only" style="padding:8px 12px 16px"><button id="homeBtn" style="width:100%">Setup & answer bank</button></div>
   </aside>
   <main id="main"><div class="empty">Loading…</div></main>
