@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
@@ -154,6 +154,88 @@ function renderNeedsYou() {
   }).join("");
 }
 
+// ---------- goals & achievements ----------
+async function loadGoals() { state.goals = await api("GET", "/api/goals").catch(() => state.goals); }
+
+function ring(p, size = 96) {
+  const r = 34, c = 2 * Math.PI * r, off = c * (1 - (p.pct || 0) / 100);
+  return `<div class="ring ${p.met ? "met" : ""}" style="width:${size}px;height:${size}px">
+    <svg viewBox="0 0 80 80"><circle class="ring-bg" cx="40" cy="40" r="${r}"/><circle class="ring-fg" cx="40" cy="40" r="${r}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"/></svg>
+    <div class="ring-text"><b>${p.count}</b><small>/ ${p.goal || "–"}</small></div>
+  </div>`;
+}
+
+function renderGoals() {
+  const g = state.goals;
+  if (!g) return `${errBox()}<div class="card"><span class="spinner"></span>Loading…</div>`;
+  const { day, week, month } = g.periods;
+  const unlocked = g.achievements.filter((a) => a.unlocked_at), locked = g.achievements.filter((a) => !a.unlocked_at);
+  const cols = []; for (let i = 0; i < g.heatmap.length; i += 7) cols.push(g.heatmap.slice(i, i + 7));
+  const heat = (d) => d.rest ? "rest" : d.count === 0 ? "" : d.met ? "l3" : d.count >= Math.max(1, Math.ceil(g.goals.daily / 2)) ? "l2" : "l1";
+  const monthLabel = (col, i) => { const d = col[0].date; const prev = cols[i - 1]?.[0].date; return (!prev || d.slice(0, 7) !== prev.slice(0, 7)) ? new Date(d + "T00:00").toLocaleString([], { month: "short" }) : ""; };
+  return `${errBox()}
+    <div class="card level">
+      <div class="toolbar" style="margin:0">
+        <div class="lvl-badge">${g.level.n}</div>
+        <div class="head-title"><h2>Level ${g.level.n} · ${esc(g.level.name)}</h2><div class="sub">${g.xp} XP · ${g.level.next - g.xp} to level ${g.level.n + 1} · ${g.total} application${g.total === 1 ? "" : "s"} sent</div></div>
+        <div class="sp"></div>
+        <div class="streak ${g.streak ? "hot" : ""}" title="Consecutive days hitting your daily goal${g.goals.weekends ? "" : " (weekends are rest days)"}"><span>🔥</span><b>${g.streak}</b><small>day streak<br>best ${g.best}</small></div>
+      </div>
+      <div class="xp"><div style="width:${g.level.pct}%"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="rings">
+        ${[day, week, month].map((p) => `<div class="ring-wrap">${ring(p)}<div class="ring-label"><b>${esc(p.label)}</b><small>${p.met ? '<span style="color:var(--ok)">goal met ✓</span>' : p.goal ? `${p.goal - p.count} to go` : "no goal set"}</small></div></div>`).join("")}
+      </div>
+      <p class="muted" style="margin:12px 0 0">Counts applications by their <b>applied</b> date — move a card to <i>applied</i> (or set the date) and it lands here. XP: 10 per application, +25 per daily goal, +75 weekly, +200 monthly, +5 per streak day.</p>
+    </div>
+
+    <div class="card"><h3>Last 16 weeks</h3>
+      <div class="heat-wrap"><div class="heat-months">${cols.map((c, i) => `<span>${monthLabel(c, i)}</span>`).join("")}</div>
+      <div class="heat">${cols.map((c) => `<div class="heat-col">${c.map((d) => `<div class="heat-cell ${heat(d)} ${d.date === g.today ? "today" : ""}" title="${d.date}: ${d.count} applied${d.met ? " · goal met" : ""}${d.rest ? " · rest day" : ""}"></div>`).join("")}</div>`).join("")}</div></div>
+      <div class="muted" style="margin-top:6px;font-size:12px">Less <span class="heat-cell l1 inline"></span><span class="heat-cell l2 inline"></span><span class="heat-cell l3 inline"></span> goal met</div>
+    </div>
+
+    <div class="card"><div class="toolbar"><h3 style="margin:0">Achievements</h3><div class="sp"></div><span class="muted">${unlocked.length} / ${g.achievements.length}</span></div>
+      <div class="badges">
+        ${unlocked.map((a) => `<div class="badge on" title="Unlocked ${fmtTime(a.unlocked_at)}"><span class="badge-icon">${a.icon}</span><b>${esc(a.name)}</b><small>${esc(a.hint)}</small></div>`).join("")}
+        ${locked.map((a) => `<div class="badge" title="Locked"><span class="badge-icon">${a.icon}</span><b>${esc(a.name)}</b><small>${esc(a.hint)}</small></div>`).join("")}
+      </div>
+    </div>
+
+    <div class="card"><h3>Targets</h3>
+      <div class="grid3">
+        <div class="field"><label>Per day</label><input id="gDaily" type="number" min="0" max="50" value="${g.goals.daily}"></div>
+        <div class="field"><label>Per week</label><input id="gWeekly" type="number" min="0" max="300" value="${g.goals.weekly}"></div>
+        <div class="field"><label>Per month</label><input id="gMonthly" type="number" min="0" max="1000" value="${g.goals.monthly}"></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)"><input type="checkbox" id="gWeekends" ${g.goals.weekends ? "checked" : ""} style="width:auto"> Count weekends (untick to make Sat/Sun rest days that don't break a streak)</label>
+      <div class="toolbar" style="margin:12px 0 0"><button class="primary" id="gSave">Save targets</button><span class="muted">Set a target to 0 to ignore it.</span></div>
+    </div>`;
+}
+
+// Compact sidebar widget: today's progress + streak.
+function goalWidget() {
+  const g = state.goals; if (!g) return "";
+  const d = g.periods.day;
+  const pct = d.goal ? Math.min(100, Math.round((d.count / d.goal) * 100)) : 0;
+  return `<div class="goal-mini ${d.met ? "met" : ""}" id="goalMini" title="Open goals">
+    <span>🎯</span><div class="goal-bar"><div style="width:${pct}%"></div></div><b>${d.count}/${d.goal || "–"}</b><span class="muted">today</span>
+    <span class="streak-mini ${g.streak ? "hot" : ""}">🔥 ${g.streak}</span></div>`;
+}
+
+// Toasts for what a status change just achieved.
+function celebrate(c) {
+  if (!c) return;
+  const msgs = [];
+  for (const h of c.hits) msgs.push(`🎯 ${h === "Today" ? "Daily" : h === "This week" ? "Weekly" : "Monthly"} goal hit!`);
+  for (const a of c.unlocked) msgs.push(`${a.icon} Achievement unlocked: ${a.name}`);
+  if (!msgs.length) return;
+  state.notice = msgs.join("  ·  "); state.celebrate = true; render();
+  clearTimeout(notify.t); notify.t = setTimeout(() => { state.notice = null; state.celebrate = false; render(); }, 6000);
+}
+
 function renderTasks() {
   const active = activeJobs().filter((j) => j.status !== "waiting"), past = state.jobs.filter((j) => j.status !== "waiting" && !active.includes(j));
   return `${errBox()}
@@ -185,8 +267,9 @@ function render() {
   // On phones the list and the detail are separate screens; body.detail picks which.
   document.body.classList.toggle("detail", state.sel !== null);
   const back = `<button class="back" id="backBtn">← Applications</button>`;
-  const notice = (state.notice ? `<div class="notice">${esc(state.notice)}</div>` : "") + renderNeedsYou();
+  const notice = (state.notice ? `<div class="notice ${state.celebrate ? "celebrate" : ""}">${esc(state.notice)}</div>` : "") + renderNeedsYou();
   if (state.sel === "tasks") main.innerHTML = back + notice + renderTasks();
+  else if (state.sel === "goals") main.innerHTML = back + notice + renderGoals();
   else if (state.sel === "new") main.innerHTML = back + notice + renderNew();
   else if (state.sel === "settings") main.innerHTML = back + notice + renderSettings();
   else if (state.app) main.innerHTML = back + notice + renderDetail(state.app);
@@ -211,6 +294,8 @@ function renderSidebar() {
     </div>`).join("") : `<div class="empty" style="padding:40px 0">${state.apps.length ? "No matches" : "No applications yet"}</div>`;
   const s = state.settings;
   $("#llmFootText").textContent = s ? `${s.provider} · ${s.model}` : "";
+  $("#logoutBtn").hidden = !s?.auth?.enabled;
+  $("#goalWidget").innerHTML = goalWidget();
   const n = activeJobs().length;
   $("#tasksBtn").innerHTML = n ? `<span class="spinner"></span>${n}` : "⏱";
   $("#tasksBtn").classList.toggle("active", n > 0);
@@ -252,6 +337,18 @@ function renderSettings() {
         <div class="toolbar" style="margin-top:6px">
           <button id="sSave">Use typed model id</button>
           <button class="ghost" id="sLoad">${models.length ? `↻ Reload list (${models.length})` : "Load available models"}</button>
+        </div></div>
+    </div>
+
+    <div class="card"><h2>Security</h2>
+      <p class="muted">${s.auth.enabled
+        ? `Password required to open this app${s.auth.source === "env" ? " (set via <code>AUTH_PASSWORD</code> in .env)" : ""}. Sessions last 30 days per browser.`
+        : "No password set — if this server is reachable on your network (see the phone URL printed at startup), anyone on it can open the app."}</p>
+      <div class="field"><label>${s.auth.enabled ? "Change password" : "Set a password"}</label>
+        <div class="toolbar" style="margin:0">
+          <input id="sAuthPw" type="password" autocomplete="new-password" placeholder="At least 8 characters" style="flex:1">
+          <button id="sAuthSave" class="primary">Save</button>
+          ${s.auth.enabled && s.auth.source === "app" ? `<button id="sAuthClear">Remove password</button>` : ""}
         </div></div>
     </div>
 
@@ -519,6 +616,7 @@ function bind() {
     root.dataset.theme = dark ? "light" : "dark";
     try { localStorage.setItem("theme", root.dataset.theme); } catch {}
   };
+  $("#logoutBtn").onclick = () => run(null, async () => { await api("POST", "/api/logout"); location.href = "/"; });
   $("#backBtn") && ($("#backBtn").onclick = () => { state.sel = null; state.app = null; state.err = null; render(); });
   document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; state.editJob = false; state.docMode = "preview"; state.tex = null; state.err = null; render(); });
 
@@ -531,6 +629,12 @@ function bind() {
     $("#sKeyClear") && ($("#sKeyClear").onclick = () => run("Removing key…", async () => { state.settings = await api("PUT", "/api/settings", { clearKey: true }); delete state.modelCache[state.settings.provider]; }));
     $("#sHostSave") && ($("#sHostSave").onclick = () => { const ollamaHost = $("#sHost").value; run("Saving host…", async () => { state.settings = await api("PUT", "/api/settings", { ollamaHost }); delete state.modelCache.ollama; await loadModels("ollama", true); }); });
     bindCombo("sModel", (model) => saveDefault({ model }, "Saving…"));
+    $("#sAuthSave") && ($("#sAuthSave").onclick = () => {
+      const password = $("#sAuthPw").value;
+      if (password.length < 8) { state.err = "Password must be at least 8 characters."; render(); return; }
+      run("Saving password…", async () => { state.settings.auth = await api("PUT", "/api/settings/auth", { password }); });
+    });
+    $("#sAuthClear") && ($("#sAuthClear").onclick = () => run("Removing password…", async () => { state.settings.auth = await api("PUT", "/api/settings/auth", { clear: true }); }));
 
     if (!state.prompts) api("GET", "/api/prompts").then((p) => { state.prompts = p; if (state.sel === "settings") render(); });
     if (!state.style) api("GET", "/api/style").then((t) => { state.style = t; if (state.sel === "settings") render(); });
@@ -560,6 +664,11 @@ function bind() {
 
   $("#importBtn") && ($("#importBtn").onclick = () => enqueue("/api/profile/import", {}, "Import resume"));
   $("#tasksBtn").onclick = () => { state.sel = "tasks"; state.app = null; state.err = null; render(); };
+  $("#goalMini") && ($("#goalMini").onclick = () => { state.sel = "goals"; state.app = null; state.err = null; render(); loadGoals().then(render); });
+  $("#gSave") && ($("#gSave").onclick = () => {
+    const body = { daily: $("#gDaily").value, weekly: $("#gWeekly").value, monthly: $("#gMonthly").value, weekends: $("#gWeekends").checked };
+    run("Saving targets…", async () => { state.goals = await api("PUT", "/api/goals", body); });
+  });
   $("#clearJobs") && ($("#clearJobs").onclick = async () => { await api("DELETE", "/api/jobs"); await refreshJobs(); render(); });
   document.querySelectorAll("[data-job-cancel]").forEach((b) => b.onclick = async () => { await api("POST", `/api/jobs/${b.dataset.jobCancel}/cancel`); await refreshJobs(); render(); });
   document.querySelectorAll("[data-job-retry]").forEach((b) => b.onclick = async () => { await api("POST", `/api/jobs/${b.dataset.jobRetry}/retry`); await refreshJobs(); render(); });
@@ -590,7 +699,11 @@ function bind() {
 
   const a = state.app;
   if (!a) return;
-  const patch = (body) => run(null, async () => { state.app = await api("PATCH", `/api/applications/${a.id}`, body); await loadList(); });
+  const patch = (body) => run(null, async () => {
+    state.app = await api("PATCH", `/api/applications/${a.id}`, body);
+    await loadList();
+    if ("status" in body || "applied_at" in body) { await loadGoals(); celebrate(state.app.celebrate); }
+  });
   document.querySelectorAll("[data-status]").forEach((b) => b.onclick = () => patch({ status: b.dataset.status }));
   $("#applied").onchange = (e) => patch({ applied_at: e.target.value || null });
   $("#notes").onchange = (e) => patch({ notes: e.target.value });
@@ -694,7 +807,7 @@ async function waitForCapture() {
 }
 
 (async () => {
-  [state.profile, state.settings, state.jobs] = await Promise.all([api("GET", "/api/profile"), api("GET", "/api/settings"), api("GET", "/api/jobs")]);
+  [state.profile, state.settings, state.jobs, state.goals] = await Promise.all([api("GET", "/api/profile"), api("GET", "/api/settings"), api("GET", "/api/jobs"), api("GET", "/api/goals").catch(() => null)]);
   await loadList();
   if (new URLSearchParams(location.search).get("capture")) { state.sel = "new"; state.busy = "Waiting for the page from your browser…"; waitForCapture(); }
   render();

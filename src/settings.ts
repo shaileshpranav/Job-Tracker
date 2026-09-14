@@ -1,4 +1,5 @@
 import { db } from "./db.ts";
+import { encrypt, decrypt, looksEncrypted, hashPassword, verifyPassword, timingSafeEqualStr } from "./crypto.ts";
 
 db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
 
@@ -42,9 +43,18 @@ function del(key: string) {
   db.prepare("DELETE FROM settings WHERE key = ?").run(key);
 }
 
-/** API key for a provider: saved in the app first, else from .env. */
+/** API key for a provider: saved in the app first (encrypted at rest), else from .env. */
 export function apiKey(provider: "anthropic" | "openrouter"): string | undefined {
-  return get(`key:${provider}`) ?? (provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : process.env.OPENROUTER_API_KEY) ?? undefined;
+  const raw = get(`key:${provider}`);
+  if (raw) {
+    if (looksEncrypted(raw)) {
+      try { return decrypt(raw); } catch { /* corrupted (e.g. secret.key lost) — treat as unset */ }
+    } else {
+      set(`key:${provider}`, encrypt(raw)); // migrate a key saved before encryption existed
+      return raw;
+    }
+  }
+  return (provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : process.env.OPENROUTER_API_KEY) ?? undefined;
 }
 
 const mask = (k?: string) => (k ? `${k.slice(0, 7)}…${k.slice(-4)}` : null);
@@ -100,11 +110,36 @@ export function saveLlmSettings(input: { provider?: string; model?: string; apiK
   if (input.model?.trim()) set(`model:${provider}`, input.model.trim());
   if (provider !== "ollama") {
     if (input.clearKey) del(`key:${provider}`);
-    else if (input.apiKey?.trim()) set(`key:${provider}`, input.apiKey.trim());
+    else if (input.apiKey?.trim()) set(`key:${provider}`, encrypt(input.apiKey.trim()));
   }
   if (input.ollamaHost !== undefined) {
     const h = input.ollamaHost.trim().replace(/\/$/, "");
     h ? set("ollamaHost", h) : del("ollamaHost");
   }
   return llmSettings();
+}
+
+/**
+ * App login: unset by default (matches today's no-auth behaviour). Set a
+ * password here or via AUTH_PASSWORD in .env to require it on every request —
+ * the app-saved one (hashed, never stored raw) wins if both are set.
+ */
+export function authStatus(): { enabled: boolean; source: "app" | "env" | null } {
+  const appSet = Boolean(get("auth:passwordHash"));
+  return { enabled: appSet || Boolean(process.env.AUTH_PASSWORD), source: appSet ? "app" : process.env.AUTH_PASSWORD ? "env" : null };
+}
+export function authRequired(): boolean {
+  return authStatus().enabled;
+}
+export function verifyAuthPassword(password: string): boolean {
+  const hash = get("auth:passwordHash");
+  if (hash) return verifyPassword(password, hash);
+  if (process.env.AUTH_PASSWORD) return timingSafeEqualStr(password, process.env.AUTH_PASSWORD);
+  return false;
+}
+export function setAuthPassword(password: string | null) {
+  if (password === null) { del("auth:passwordHash"); return authStatus(); }
+  if (password.trim().length < 8) throw new Error("Password must be at least 8 characters");
+  set("auth:passwordHash", hashPassword(password.trim()));
+  return authStatus();
 }

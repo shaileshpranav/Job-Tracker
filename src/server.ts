@@ -10,12 +10,98 @@ import { listPrompts, savePrompt } from "./prompts.ts";
 import { registerJob, enqueue, listJobs, getJob, cancelJob, retryJob, resumeJob, resumeMatching, clearFinishedJobs, NeedsYou, type Progress } from "./queue.ts";
 import { loadResume, loadNotes, profileStatus } from "./profile.ts";
 import { printPage } from "./markdown.ts";
-import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, type Provider, type Task, type StyleKind } from "./settings.ts";
+import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, authStatus, authRequired, verifyAuthPassword, setAuthPassword, type Provider, type Task, type StyleKind } from "./settings.ts";
 import { listModels } from "./llm.ts";
+import { stats, getGoals, saveGoals, checkAchievements, listAchievements } from "./goals.ts";
+import { signSession, verifySession } from "./crypto.ts";
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? "0.0.0.0"; // reachable from your phone on the same Wi-Fi; set HOST=127.0.0.1 to keep it local-only
 const PUBLIC = path.join(import.meta.dirname, "public");
+
+// ---------- auth (optional — off unless a password is set via AUTH_PASSWORD or ⚙ Settings) ----------
+
+const SESSION_COOKIE = "jt_session";
+const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
+
+function cookies(req: http.IncomingMessage): Record<string, string> {
+  const header = req.headers.cookie;
+  if (!header) return {};
+  const out: Record<string, string> = {};
+  for (const part of header.split(";")) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+function isAuthed(req: http.IncomingMessage): boolean {
+  return !authRequired() || Boolean(verifySession(cookies(req)[SESSION_COOKIE] ?? ""));
+}
+function setSessionCookie(res: http.ServerResponse) {
+  const token = signSession(Date.now() + SESSION_MS);
+  res.setHeader("set-cookie", `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_MS / 1000)}`);
+}
+function clearSessionCookie(res: http.ServerResponse) {
+  res.setHeader("set-cookie", `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+/** Reachable without a session: login itself, static JS, and the bookmarklet's
+ * cross-origin capture drop (it only queues page text for the app to claim
+ * after login — nothing readable comes back from it). */
+function isPublicRoute(method: string | undefined, pathname: string): boolean {
+  if (pathname === "/api/login" && method === "POST") return true;
+  if (pathname === "/app.js" && method === "GET") return true;
+  if (pathname === "/favicon.ico" && method === "GET") return true;
+  if (pathname === "/api/bookmarklet" && method === "GET") return true;
+  if (pathname === "/api/captures" && (method === "POST" || method === "OPTIONS")) return true;
+  return false;
+}
+const LOGIN_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Tracker</title>
+<script>try{const t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}</script>
+<style>
+  :root { --bg:#f4f4f1; --panel:#ffffff; --ink:#1b1b1a; --mute:#6b6b68; --line:#e4e4df; --accent:#2f5bea; --accent-ink:#fff; --bad:#b83232; --shadow:0 1px 2px rgba(20,20,20,.04),0 6px 20px rgba(20,20,20,.05); }
+  [data-theme="dark"] { --bg:#121315; --panel:#1b1d20; --ink:#e8e8e6; --mute:#9a9a97; --line:#2c2f34; --accent:#6f8cff; --accent-ink:#0d1220; color-scheme:dark; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#121315; --panel:#1b1d20; --ink:#e8e8e6; --mute:#9a9a97; --line:#2c2f34; --accent:#6f8cff; --accent-ink:#0d1220; color-scheme:dark; } }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Helvetica,Arial,sans-serif; background:var(--bg); color:var(--ink); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:28px 26px; width:min(340px, 90vw); }
+  h1 { font-size:16px; margin:0 0 4px; } h1::before { content:"◆"; color:var(--accent); margin-right:8px; }
+  p.muted { color:var(--mute); margin:0 0 18px; font-size:13px; }
+  input { font:inherit; width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--ink); margin-bottom:10px; }
+  input:focus { outline:none; border-color:var(--accent); }
+  button { font:inherit; font-weight:500; width:100%; padding:9px 11px; border:1px solid var(--accent); border-radius:8px; background:var(--accent); color:var(--accent-ink); cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  .err { color:var(--bad); font-size:13px; margin:0 0 10px; min-height:16px; }
+</style>
+</head>
+<body>
+  <form class="card" id="f">
+    <h1>Job Tracker</h1>
+    <p class="muted">Enter the password to continue.</p>
+    <p class="err" id="err"></p>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Password" autofocus>
+    <button id="go">Log in</button>
+  </form>
+<script>
+  const f = document.getElementById("f"), pw = document.getElementById("pw"), err = document.getElementById("err"), go = document.getElementById("go");
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    err.textContent = ""; go.disabled = true; go.textContent = "Checking…";
+    try {
+      const res = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: pw.value }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Incorrect password");
+      location.href = "/";
+    } catch (e) { err.textContent = e.message; go.disabled = false; go.textContent = "Log in"; }
+  };
+</script>
+</body>
+</html>`;
 
 /** Page text handed over by the bookmarklet, waiting for the app page to claim it. */
 const pendingCaptures: { ts: number; url: string; title: string; text: string; resumed_job?: number; label?: string }[] = [];
@@ -325,6 +411,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     return send(res, 200, pendingCaptures.shift() ?? null); // oldest first, so nothing is skipped
   }
 
+  // Goals & achievements
+  if (m("GET", /^\/api\/goals$/)) { checkAchievements(); return send(res, 200, { ...stats(), achievements: listAchievements() }); }
+  if (m("PUT", /^\/api\/goals$/)) { saveGoals(await readJson(req)); return send(res, 200, { ...stats(), achievements: listAchievements() }); }
+
   // Prompts
   if (m("GET", /^\/api\/prompts$/)) return send(res, 200, listPrompts());
   if ((r = m("PUT", /^\/api\/prompts\/(\w+)$/))) {
@@ -333,9 +423,28 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     return send(res, 200, listPrompts());
   }
 
+  // auth
+  if (m("POST", /^\/api\/login$/)) {
+    const { password } = await readJson(req);
+    if (typeof password !== "string" || !verifyAuthPassword(password)) {
+      await new Promise((r) => setTimeout(r, 300)); // slow down brute-forcing a little
+      throw new HttpError(401, "Incorrect password");
+    }
+    setSessionCookie(res);
+    return send(res, 200, { ok: true });
+  }
+  if (m("POST", /^\/api\/logout$/)) { clearSessionCookie(res); return send(res, 200, { ok: true }); }
+  if (m("GET", /^\/api\/settings\/auth$/)) return send(res, 200, authStatus());
+  if (m("PUT", /^\/api\/settings\/auth$/)) {
+    const body = await readJson(req);
+    const status = setAuthPassword(body.clear ? null : String(body.password ?? ""));
+    if (!body.clear) setSessionCookie(res); // keep this browser logged in under the new password
+    return send(res, 200, status);
+  }
+
   // LLM settings
-  if (m("GET", /^\/api\/settings$/)) return send(res, 200, { ...llmSettings(), providers: PROVIDERS, latex: latexReady });
-  if (m("PUT", /^\/api\/settings$/)) return send(res, 200, { ...saveLlmSettings(await readJson(req)), providers: PROVIDERS, latex: latexReady });
+  if (m("GET", /^\/api\/settings$/)) return send(res, 200, { ...llmSettings(), providers: PROVIDERS, latex: latexReady, auth: authStatus() });
+  if (m("PUT", /^\/api\/settings$/)) return send(res, 200, { ...saveLlmSettings(await readJson(req)), providers: PROVIDERS, latex: latexReady, auth: authStatus() });
   if ((r = m("PUT", /^\/api\/settings\/tasks\/(\w+)$/))) {
     const body = await readJson(req);
     return send(res, 200, { ...saveTaskRoute(r[1] as Task, body.reset ? null : body), providers: PROVIDERS });
@@ -377,6 +486,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if ((r = m("PATCH", /^\/api\/applications\/(\d+)$/))) {
     const app = mustApp(r[1]);
     const body = await readJson(req);
+    const before = "status" in body || "applied_at" in body ? stats() : null;
     const allowed = ["company", "role", "location", "url", "salary", "status", "applied_at", "notes", "description", "requirements"] as const;
     for (const k of allowed) {
       if (!(k in body)) continue;
@@ -387,7 +497,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
       if (k === "description" && body.description !== app.description) db.prepare("UPDATE applications SET source_text = ? WHERE id = ?").run(body.description, app.id);
       if (k === "status" && body.status !== app.status) {
         logEvent(app.id, "status", `${app.status} → ${body.status}`);
-        if (body.status === "applied" && !app.applied_at) db.prepare("UPDATE applications SET applied_at = date('now') WHERE id = ?").run(app.id);
+        if (body.status === "applied" && !app.applied_at) db.prepare("UPDATE applications SET applied_at = date('now','localtime') WHERE id = ?").run(app.id);
       }
     }
     touch(app.id);
@@ -396,7 +506,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
       writeJobFile(updated);
       logEvent(app.id, "edited", "Job details updated");
     }
-    return send(res, 200, appDetail(updated));
+    // Gamification: what did this change just achieve?
+    let celebrate: { unlocked: ReturnType<typeof checkAchievements>; hits: string[]; streak: number } | null = null;
+    if (before) {
+      const after = stats();
+      const hits = (["day", "week", "month"] as const).filter((k) => !before.periods[k].met && after.periods[k].met).map((k) => after.periods[k].label);
+      celebrate = { unlocked: checkAchievements(after), hits, streak: after.streak };
+    }
+    return send(res, 200, { ...appDetail(updated), celebrate });
   }
   if ((r = m("DELETE", /^\/api\/applications\/(\d+)$/))) {
     const app = mustApp(r[1]);
@@ -548,6 +665,11 @@ function writeQuestionsFile(app: Application) {
 
 http.createServer(async (req, res) => {
   try {
+    const pathname = new URL(req.url!, "http://x").pathname;
+    if (!isPublicRoute(req.method, pathname) && !isAuthed(req)) {
+      if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) return send(res, 200, LOGIN_PAGE, "text/html");
+      throw new HttpError(401, "Authentication required");
+    }
     await route(req, res);
   } catch (e: any) {
     const status = e instanceof HttpError ? e.status : 500;
@@ -563,5 +685,6 @@ http.createServer(async (req, res) => {
     for (const ifs of Object.values(os.networkInterfaces())) {
       for (const i of ifs ?? []) if (i.family === "IPv4" && !i.internal) console.log(`  on your phone → http://${i.address}:${PORT}`);
     }
+    if (!authRequired()) console.log("  ⚠ No password set — anyone on your network can open this app. Set AUTH_PASSWORD in .env, or add one in ⚙ Settings → Security.");
   }
 });
