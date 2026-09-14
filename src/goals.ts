@@ -9,8 +9,8 @@ db.exec("CREATE TABLE IF NOT EXISTS achievements (key TEXT PRIMARY KEY, unlocked
 
 // ---------- goals (settings) ----------
 
-export interface Goals { daily: number; weekly: number; monthly: number; weekends: boolean }
-const DEFAULT_GOALS: Goals = { daily: 2, weekly: 10, monthly: 40, weekends: true };
+export interface Goals { daily: number; weekly: number; monthly: number; weekends: boolean; followupDays: number }
+const DEFAULT_GOALS: Goals = { daily: 2, weekly: 10, monthly: 40, weekends: true, followupDays: 7 };
 
 const getSetting = (k: string) => (db.prepare("SELECT value FROM settings WHERE key = ?").get(k) as { value: string } | undefined)?.value;
 const setSetting = (k: string, v: string) => db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(k, v);
@@ -27,6 +27,7 @@ export function saveGoals(input: Partial<Goals>): Goals {
     weekly: input.weekly !== undefined ? num(input.weekly, g.weekly, 300) : g.weekly,
     monthly: input.monthly !== undefined ? num(input.monthly, g.monthly, 1000) : g.monthly,
     weekends: input.weekends !== undefined ? Boolean(input.weekends) : g.weekends,
+    followupDays: input.followupDays !== undefined ? num(input.followupDays, g.followupDays, 90) : g.followupDays,
   };
   setSetting("goals", JSON.stringify(next));
   return next;

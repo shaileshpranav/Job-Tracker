@@ -11,7 +11,8 @@ import { profileStatus } from "./profile.ts";
 import { printPage } from "./markdown.ts";
 import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, authStatus, authRequired, setAuthPassword, type Provider, type Task, type StyleKind } from "./settings.ts";
 import { listModels } from "./llm.ts";
-import { stats, saveGoals, checkAchievements, listAchievements } from "./goals.ts";
+import { stats, getGoals, saveGoals, checkAchievements, listAchievements, today } from "./goals.ts";
+import { spawn } from "node:child_process";
 import { HttpError, readJson, send } from "./http.ts";
 import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
@@ -137,6 +138,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   // profile
   if (m("GET", /^\/api\/profile$/)) return send(res, 200, profileStatus());
   if (m("POST", /^\/api\/profile\/import$/)) return send(res, 202, { job: enqueue("import", "Import resume") });
+  if (m("GET", /^\/api\/profile\/resume$/)) {
+    const p = path.join(PROFILE_DIR, "resume.md");
+    if (!fs.existsSync(p)) throw new HttpError(404, "No base resume yet — import one first");
+    return send(res, 200, { markdown: fs.readFileSync(p, "utf8") });
+  }
 
   // jobs
   if (m("GET", /^\/api\/jobs$/)) return send(res, 200, listJobs());
@@ -152,7 +158,17 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
 
   // applications
   if (m("GET", /^\/api\/applications$/)) {
-    const rows = db.prepare("SELECT id, company, role, location, status, applied_at, url, fit_score, fit_status, created_at, updated_at FROM applications ORDER BY updated_at DESC").all();
+    const rows = db.prepare("SELECT id, company, role, location, status, applied_at, url, fit_score, fit_status, next_action_at, next_action, followed_up_at, created_at, updated_at FROM applications ORDER BY updated_at DESC").all() as any[];
+    const t = today(), days = getGoals().followupDays;
+    const ageDays = (d: string) => Math.floor((Date.parse(t) - Date.parse(d)) / 86_400_000);
+    for (const a of rows) {
+      // Due when a next action is dated today/earlier, or when an application has sat in
+      // applied/screening for `followupDays` since the last touch without a reply.
+      const last = [a.applied_at, a.followed_up_at].filter(Boolean).sort().pop();
+      const stale = ["applied", "screening"].includes(a.status) && last && days > 0 && ageDays(last) >= days;
+      a.due = a.next_action_at && a.next_action_at <= t ? "action" : stale ? "followup" : null;
+      a.days_since = last ? ageDays(last) : null;
+    }
     return send(res, 200, rows);
   }
   if (m("POST", /^\/api\/applications$/)) {
@@ -166,12 +182,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const app = mustApp(r[1]);
     const body = await readJson(req);
     const before = "status" in body || "applied_at" in body ? stats() : null;
-    const allowed = ["company", "role", "location", "url", "salary", "status", "applied_at", "notes", "description", "requirements"] as const;
+    const allowed = ["company", "role", "location", "url", "salary", "status", "applied_at", "notes", "description", "requirements", "next_action_at", "next_action"] as const;
     for (const k of allowed) {
       if (!(k in body)) continue;
       if (k === "status" && !STATUSES.includes(body.status)) throw new HttpError(400, "Bad status");
       if ((k === "company" || k === "role") && !String(body[k] ?? "").trim()) throw new HttpError(400, `${k} cannot be empty`);
-      if (k === "applied_at" && body.applied_at && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.applied_at))) throw new HttpError(400, "applied_at must be YYYY-MM-DD");
+      if ((k === "applied_at" || k === "next_action_at") && body[k] && !/^\d{4}-\d{2}-\d{2}$/.test(String(body[k]))) throw new HttpError(400, `${k} must be YYYY-MM-DD`);
       const value = k === "requirements" ? JSON.stringify(Array.isArray(body.requirements) ? body.requirements.map(String) : []) : body[k] === undefined ? null : body[k];
       db.prepare(`UPDATE applications SET ${k} = ? WHERE id = ?`).run(value, app.id);
       if (k === "description" && body.description !== app.description) db.prepare("UPDATE applications SET source_text = ? WHERE id = ?").run(body.description, app.id);
@@ -201,6 +217,50 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     db.prepare("UPDATE jobs SET status = 'cancelled', finished_at = datetime('now') WHERE application_id = ? AND status = 'queued'").run(app.id);
     db.prepare("DELETE FROM applications WHERE id = ?").run(app.id);
     return send(res, 200, { ok: true, folder: app.folder }); // files on disk are left alone
+  }
+
+  // timeline: notes and follow-ups logged by hand
+  if ((r = m("POST", /^\/api\/applications\/(\d+)\/events$/))) {
+    const app = mustApp(r[1]);
+    const { kind, detail } = await readJson(req);
+    if (!["note", "followup", "interview", "call"].includes(kind)) throw new HttpError(400, "kind must be note, followup, interview or call");
+    const text = String(detail ?? "").trim();
+    if (kind === "note" && !text) throw new HttpError(400, "Note is empty");
+    logEvent(app.id, kind, text || { followup: "Followed up", interview: "Interview", call: "Call" }[kind as string] || "");
+    if (kind === "followup") db.prepare("UPDATE applications SET followed_up_at = ?, next_action_at = NULL, next_action = NULL WHERE id = ?").run(today(), app.id);
+    touch(app.id);
+    return send(res, 200, appDetail(getApp(app.id)!));
+  }
+  if ((r = m("DELETE", /^\/api\/events\/(\d+)$/))) {
+    const ev = db.prepare("SELECT * FROM events WHERE id = ?").get(Number(r[1])) as any;
+    if (!ev) throw new HttpError(404, "Event not found");
+    if (!["note", "followup", "interview", "call"].includes(ev.kind)) throw new HttpError(400, "Only hand-logged entries can be removed");
+    db.prepare("DELETE FROM events WHERE id = ?").run(ev.id);
+    return send(res, 200, appDetail(getApp(ev.application_id)!));
+  }
+  if ((r = m("POST", /^\/api\/applications\/(\d+)\/prep$/))) {
+    const app = mustApp(r[1]);
+    if (!fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) throw new HttpError(400, "Import your resume first");
+    return send(res, 202, { job: enqueue("prep", `Interview prep — ${app.company}`, {}, app.id) });
+  }
+
+  // export / backup
+  if (m("GET", /^\/api\/export\/applications\.csv$/)) {
+    const rows = db.prepare("SELECT id, company, role, location, salary, status, applied_at, fit_score, url, next_action_at, next_action, followed_up_at, notes, created_at FROM applications ORDER BY id").all() as any[];
+    const cols = Object.keys(rows[0] ?? { id: 1, company: "", role: "" });
+    const cell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [cols.join(","), ...rows.map((row) => cols.map((c) => cell(row[c])).join(","))].join("\n");
+    res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="applications-${today()}.csv"` });
+    return res.end("\ufeff" + csv);
+  }
+  if (m("GET", /^\/api\/export\/backup$/)) {
+    // Everything needed to restore: database (+ WAL), per-application files, base resume, templates, secret key.
+    const parts = ["data", "applications", "profile", "templates"].filter((d) => fs.existsSync(path.join(ROOT, d)));
+    res.writeHead(200, { "content-type": "application/gzip", "content-disposition": `attachment; filename="job-tracker-backup-${today()}.tar.gz"` });
+    const tar = spawn("tar", ["-czf", "-", "-C", ROOT, ...parts], { stdio: ["ignore", "pipe", "inherit"] }); // spawn: raw bytes, no utf8 decoding
+    tar.stdout.pipe(res);
+    tar.on("error", () => res.end());
+    return;
   }
 
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/reextract$/))) {

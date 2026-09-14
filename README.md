@@ -69,6 +69,14 @@ The 🎯 bar under the sidebar header shows today's progress and your streak; cl
 - **Heatmap** of the last 16 weeks.
 - **Achievements** for milestones (first application, power day, streaks of 3/7/14/30, weekly and monthly wins, 10/25/50/100 sent, five 4+-fit applications, reaching screening / interview / offer, levels 3 and 5). Unlocks are announced as they happen.
 
+## Follow-ups, notes and interview prep
+
+- **Next action** — each application has a date + note in its header; when the date arrives it shows ⏰ in the list and under the **follow up** filter. Applications sitting in *applied*/*screening* with no reply for N days (Goals → "nudge me after", default 7) are flagged the same way. **✓ Followed up** logs it and clears the flag; ☎ Call / 🤝 Interview log those.
+- **Timeline** — add free-text notes (recruiter names, what was said); hand-logged entries can be removed.
+- **Prep tab** — generates an interview prep sheet for *this* role: positioning pitch, likely questions with talking points from your own experience, how to handle the gaps the fit score found, STAR stories to have ready, and questions to ask them. Saved as `interview-prep.md`.
+- **Compare** (Resume / Cover letter tabs) — line diff of the current version against the base resume or any earlier version; the fastest way to spot anything the model invented or dropped.
+- **Backup & export** (home screen) — `.tar.gz` of the database, application folders, base resume, templates and secret key; CSV of all applications.
+
 ## Tasks queue
 
 Every model-backed action — capture, re-extract, fit score, resume/cover letter, condense, answers, resume import — is queued as a **task** and runs in the background, one at a time (set `JOB_CONCURRENCY=2` in `.env` to allow more if you're on hosted models). Buttons return instantly; the ⏱ button shows how many tasks are active and opens the Tasks panel with live progress, history, **Cancel** (queued tasks stop immediately; running ones stop at their next step) and **Retry**. The tab you're on shows an inline "working…" banner for its own tasks, and the app refreshes itself when a task finishes. Tasks are stored in SQLite, so a queue survives a restart (anything mid-flight when the server stopped is marked failed for retry).

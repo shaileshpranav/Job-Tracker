@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
@@ -23,6 +23,22 @@ function mdToHtml(md) {
     else { close(); para.push(line.trim()); }
   }
   flush(); close(); return out.join("\n");
+}
+
+// Line-level diff (LCS) — good enough to eyeball what changed between versions.
+function renderDiff(a, b) {
+  const A = a.split("\n"), B = b.split("\n"), n = A.length, m = B.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { out.push(`<div class="d-eq">${esc(A[i]) || "&nbsp;"}</div>`); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) { out.push(`<div class="d-del">${esc(A[i]) || "&nbsp;"}</div>`); i++; }
+    else { out.push(`<div class="d-add">${esc(B[j]) || "&nbsp;"}</div>`); j++; }
+  }
+  while (i < n) out.push(`<div class="d-del">${esc(A[i++]) || "&nbsp;"}</div>`);
+  while (j < m) out.push(`<div class="d-add">${esc(B[j++]) || "&nbsp;"}</div>`);
+  return out.join("");
 }
 
 // SQLite timestamps are UTC without a zone marker; show them in local time.
@@ -96,6 +112,7 @@ async function onJobFinished(j) {
     state.app = await api("GET", `/api/applications/${state.app.id}`);
     if (j.type === "generate") { state.tab = result.what === "cover_letter" ? "cover_letter" : "resume"; state.docMode = "preview"; state.tex = null; }
     if (j.type === "condense") { state.docMode = "preview"; state.tex = null; }
+    if (j.type === "prep") state.tab = "prep";
   }
 }
 
@@ -210,6 +227,7 @@ function renderGoals() {
         <div class="field"><label>Per week</label><input id="gWeekly" type="number" min="0" max="300" value="${g.goals.weekly}"></div>
         <div class="field"><label>Per month</label><input id="gMonthly" type="number" min="0" max="1000" value="${g.goals.monthly}"></div>
       </div>
+      <div class="field"><label>Nudge me to follow up after</label><div class="toolbar" style="margin:0"><input id="gFollow" type="number" min="0" max="90" value="${g.goals.followupDays}" style="width:90px"><span class="muted">days in <i>applied</i> / <i>screening</i> with no reply (0 = off). Shows as ⏰ in the list.</span></div></div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)"><input type="checkbox" id="gWeekends" ${g.goals.weekends ? "checked" : ""} style="width:auto"> Count weekends (untick to make Sat/Sun rest days that don't break a streak)</label>
       <div class="toolbar" style="margin:12px 0 0"><button class="primary" id="gSave">Save targets</button><span class="muted">Set a target to 0 to ignore it.</span></div>
     </div>`;
@@ -282,15 +300,17 @@ function render() {
 function renderSidebar() {
   const counts = { all: state.apps.length };
   for (const a of state.apps) counts[a.status] = (counts[a.status] || 0) + 1;
+  const due = state.apps.filter((a) => a.due).length;
   $("#filters").innerHTML = ["all", ...STATUSES].filter((s) => s === "all" || counts[s])
-    .map((s) => `<button data-f="${s}" class="${state.filter === s ? "on" : ""}">${s} ${counts[s] || 0}</button>`).join("");
+    .map((s) => `<button data-f="${s}" class="${state.filter === s ? "on" : ""}">${s} ${counts[s] || 0}</button>`).join("")
+    + (due ? `<button data-f="due" class="due ${state.filter === "due" ? "on" : ""}">⏰ follow up ${due}</button>` : "");
   const q = state.search.trim().toLowerCase();
-  const rows = state.apps.filter((a) => (state.filter === "all" || a.status === state.filter) && (!q || `${a.company} ${a.role} ${a.location || ""}`.toLowerCase().includes(q)));
+  const rows = state.apps.filter((a) => (state.filter === "all" || (state.filter === "due" ? a.due : a.status === state.filter)) && (!q || `${a.company} ${a.role} ${a.location || ""}`.toLowerCase().includes(q)));
   $("#list").innerHTML = rows.length ? rows.map((a) => `
     <div class="row ${a.id === state.sel ? "sel" : ""}" data-id="${a.id}">
       <b>${esc(a.company)}<span class="pill ${a.status}">${a.status}</span>${a.fit_score ? `<span class="pill fit f${a.fit_score}" title="Fit score">★ ${a.fit_score}</span>` : a.fit_status === "pending" ? `<span class="pill" title="Scoring fit…">★ …</span>` : ""}</b>
       <span>${esc(a.role)}</span><br>
-      <small>${esc(a.location || "")}${a.applied_at ? ` · applied ${a.applied_at}` : ""}</small>
+      <small>${esc(a.location || "")}${a.applied_at ? ` · applied ${a.applied_at}` : ""}${a.due === "action" ? ` · <span class="due-txt">⏰ ${esc(a.next_action || "action due")}</span>` : a.due === "followup" ? ` · <span class="due-txt">⏰ ${a.days_since}d, follow up</span>` : ""}</small>
     </div>`).join("") : `<div class="empty" style="padding:40px 0">${state.apps.length ? "No matches" : "No applications yet"}</div>`;
   const s = state.settings;
   $("#llmFootText").textContent = s ? `${s.provider} · ${s.model}` : "";
@@ -448,6 +468,10 @@ function renderHome() {
       <p><a id="bookmarklet" class="bm" href="#" draggable="true">📌 Save to Job Tracker</a> <button id="bmCopy" style="margin-left:8px">Copy code</button> <span class="muted">(can't drag? copy, create a bookmark, paste as its URL)</span></p>
       <p class="muted">The app must be running when you click it. On your phone, copy the posting text and use <b>+ New → paste the description</b> instead.</p>
     </div>
+    <div class="card"><h3>Backup & export</h3>
+      <p class="muted">Everything lives on this machine. Take a copy now and then — the archive restores by unpacking it over a fresh checkout.</p>
+      <div class="toolbar" style="margin:0"><a href="/api/export/backup"><button class="primary">⬇ Full backup (.tar.gz)</button></a><a href="/api/export/applications.csv"><button>⬇ Applications (.csv)</button></a><span class="muted">Backup = database, application folders, base resume, templates, secret key.</span></div>
+    </div>
     <div class="card"><h3>Answer bank</h3>
       <input id="bankQ" placeholder="Search previous answers…">
       <div id="bank"></div>
@@ -470,8 +494,8 @@ function renderNew() {
 }
 
 function renderDetail(a) {
-  const tabs = ["job", "resume", "cover_letter", "questions", "timeline"];
-  const names = { job: "Job", resume: "Resume", cover_letter: "Cover letter", questions: "Questions", timeline: "Timeline" };
+  const tabs = ["job", "resume", "cover_letter", "questions", "prep", "timeline"];
+  const names = { job: "Job", resume: "Resume", cover_letter: "Cover letter", questions: "Questions", prep: "Prep", timeline: "Timeline" };
   return `${busy()}${errBox()}
     <div class="card">
       <div class="toolbar">
@@ -481,11 +505,17 @@ function renderDetail(a) {
         <button id="delBtn" class="ghost icon" title="Delete application">🗑</button>
       </div>
       <div class="seg status-seg">${STATUSES.map((s) => `<button data-status="${s}" class="${s === a.status ? "on " + s : ""}">${s}</button>`).join("")}</div>
-      <div class="field"><label>Notes</label><textarea id="notes" style="min-height:60px">${esc(a.notes)}</textarea></div>
+      <div class="grid2" style="gap:10px">
+        <div class="field" style="margin:0"><label>Notes</label><textarea id="notes" style="min-height:60px">${esc(a.notes)}</textarea></div>
+        <div class="field" style="margin:0"><label>Next action</label>
+          <div class="toolbar" style="margin:0;flex-wrap:nowrap"><input type="date" id="nextAt" value="${a.next_action_at || ""}" style="width:auto"><input id="nextTxt" placeholder="e.g. chase recruiter, prep for screen" value="${esc(a.next_action || "")}"></div>
+          <div class="toolbar" style="margin:6px 0 0"><button data-log="followup" title="Logs a follow-up today and clears the next action">✓ Followed up</button><button data-log="call">☎ Call</button><button data-log="interview">🤝 Interview</button>${a.followed_up_at ? `<span class="muted">last follow-up ${a.followed_up_at}</span>` : ""}</div>
+        </div>
+      </div>
     </div>
     <div class="tabs">${tabs.map((t) => `<button data-tab="${t}" class="${state.tab === t ? "on" : ""}">${names[t]}</button>`).join("")}</div>
-    ${jobBadge(a.id, { job: ["reextract", "fit"], resume: ["generate", "condense", "learn"], cover_letter: ["generate", "learn"], questions: ["questions"], timeline: [] }[state.tab])}
-    ${({ job: renderJob, resume: () => renderDoc(a, "resume"), cover_letter: () => renderDoc(a, "cover_letter"), questions: renderQuestions, timeline: renderTimeline })[state.tab](a)}`;
+    ${jobBadge(a.id, { job: ["reextract", "fit"], resume: ["generate", "condense", "learn"], cover_letter: ["generate", "learn"], questions: ["questions"], prep: ["prep"], timeline: [] }[state.tab])}
+    ${({ job: renderJob, resume: () => renderDoc(a, "resume"), cover_letter: () => renderDoc(a, "cover_letter"), questions: renderQuestions, prep: renderPrep, timeline: renderTimeline })[state.tab](a)}`;
 }
 
 function renderFit(a) {
@@ -550,9 +580,16 @@ function renderDoc(a, kind) {
          <textarea class="doc" id="texText" spellcheck="false" style="min-height:480px">${esc(state.tex.tex)}</textarea>
          <div class="toolbar" style="margin-top:8px"><button class="primary" id="texSave">Save & rebuild PDF</button>${state.tex.custom ? `<button id="texReset">Reset to generated</button>` : ""}<div class="sp"></div><span class="muted" id="texResult"></span></div>`
       : `<p class="muted"><span class="spinner"></span>Loading LaTeX…</p>`;
+    else if (mode === "diff") {
+      const options = [...(kind === "resume" ? [["base", "Base resume (profile/resume.md)"]] : []), ...docs.slice(1).map((d, i) => [String(d.id), `v${docs.length - 1 - i} · ${fmtTime(d.created_at)}`])];
+      const sel = options.some(([v]) => v === state.diffAgainst) ? state.diffAgainst : options[0]?.[0];
+      const other = sel === "base" ? state.baseResume : docs.find((d) => String(d.id) === sel)?.content;
+      body = `<div class="toolbar"><span class="muted">Compare this version with</span><div class="seg wrap">${options.map(([v, n]) => `<button data-diff="${v}" class="${sel === v ? "on" : ""}">${esc(n)}</button>`).join("") || '<span class="muted">nothing yet — only one version</span>'}</div></div>
+        ${other == null ? (sel === "base" ? '<p class="muted"><span class="spinner"></span>Loading base resume…</p>' : "") : `<div class="diff-legend muted"><span class="d-add">added</span> <span class="d-del">removed</span> — a quick way to spot anything the model invented or dropped.</div><div class="diff">${renderDiff(other, doc.content)}</div>`}`;
+    }
     else body = `<div class="preview ${kind}">${mdToHtml(doc.content)}</div>`;
   } else body = `<p class="muted">No ${label} yet. Generation uses <code>profile/resume.md</code> + this job's description${kind === "resume" ? ", and is constrained to one page" : ""}.</p>`;
-  const modes = [["preview", "Preview"], ["edit", "Edit"], ...(a.latex ? [["tex", "LaTeX"]] : [])];
+  const modes = [["preview", "Preview"], ["edit", "Edit"], ...(a.latex ? [["tex", "LaTeX"]] : []), ["diff", "Compare"]];
   return `<div class="card">
     <div class="doc-actions">
       <div class="doc-group"><span>Generate</span><div>
@@ -589,8 +626,19 @@ function renderQuestions(a) {
   </div>`).join("")}`;
 }
 
+function renderPrep(a) {
+  const doc = a.documents.find((d) => d.kind === "prep");
+  return `<div class="card">
+    <div class="toolbar"><button class="${doc ? "" : "primary"}" id="prepBtn">${doc ? "↻ Regenerate prep sheet" : "🎓 Prepare me for the interview"}</button><div class="sp"></div>${doc ? `<span class="muted">${fmtTime(doc.created_at)}</span>` : ""}</div>
+    ${doc ? `<div class="preview">${mdToHtml(doc.content)}</div>` : `<p class="muted">A prep sheet for <b>this</b> role: how to pitch yourself, likely questions with talking points from your own experience, how to handle the gaps the fit score found, stories to have ready, and questions to ask them.${a.fit ? "" : " Score the fit first for better gap coverage."}</p>`}
+  </div>`;
+}
+
+const EV_ICON = { created: "✨", status: "➜", generated: "📄", questions: "💬", questions_found: "❓", fit: "★", edited: "✎", reextracted: "↻", learned: "🎓", note: "📝", followup: "✓", call: "☎", interview: "🤝" };
 function renderTimeline(a) {
-  return `<div class="card">${a.events.map((e) => `<div class="ev"><small>${fmtTime(e.created_at)}</small><b>${esc(e.kind)}</b><span>${esc(e.detail)}</span></div>`).join("") || '<span class="muted">No events</span>'}</div>
+  return `<div class="card">
+    <div class="toolbar"><input id="noteTxt" placeholder="Log a note — recruiter name, what they said, salary mentioned…" style="flex:1"><button id="noteAdd">Add note</button></div>
+    ${a.events.map((e) => `<div class="ev"><small>${fmtTime(e.created_at)}</small><b>${EV_ICON[e.kind] || "•"} ${esc(e.kind.replace("_", " "))}</b><span style="flex:1;white-space:pre-wrap">${esc(e.detail)}</span>${["note", "followup", "interview", "call"].includes(e.kind) ? `<button class="ghost icon" data-ev-del="${e.id}" title="Remove">×</button>` : ""}</div>`).join("") || '<span class="muted">No events</span>'}</div>
     <p class="muted">Files: <code>applications/${esc(a.folder)}/</code></p>`;
 }
 
@@ -666,8 +714,8 @@ function bind() {
   $("#tasksBtn").onclick = () => { state.sel = "tasks"; state.app = null; state.err = null; render(); };
   $("#goalMini") && ($("#goalMini").onclick = () => { state.sel = "goals"; state.app = null; state.err = null; render(); loadGoals().then(render); });
   $("#gSave") && ($("#gSave").onclick = () => {
-    const body = { daily: $("#gDaily").value, weekly: $("#gWeekly").value, monthly: $("#gMonthly").value, weekends: $("#gWeekends").checked };
-    run("Saving targets…", async () => { state.goals = await api("PUT", "/api/goals", body); });
+    const body = { daily: $("#gDaily").value, weekly: $("#gWeekly").value, monthly: $("#gMonthly").value, weekends: $("#gWeekends").checked, followupDays: $("#gFollow").value };
+    run("Saving targets…", async () => { state.goals = await api("PUT", "/api/goals", body); await loadList(); });
   });
   $("#clearJobs") && ($("#clearJobs").onclick = async () => { await api("DELETE", "/api/jobs"); await refreshJobs(); render(); });
   document.querySelectorAll("[data-job-cancel]").forEach((b) => b.onclick = async () => { await api("POST", `/api/jobs/${b.dataset.jobCancel}/cancel`); await refreshJobs(); render(); });
@@ -707,6 +755,13 @@ function bind() {
   document.querySelectorAll("[data-status]").forEach((b) => b.onclick = () => patch({ status: b.dataset.status }));
   $("#applied").onchange = (e) => patch({ applied_at: e.target.value || null });
   $("#notes").onchange = (e) => patch({ notes: e.target.value });
+  $("#nextAt").onchange = (e) => patch({ next_action_at: e.target.value || null });
+  $("#nextTxt").onchange = (e) => patch({ next_action: e.target.value.trim() || null });
+  document.querySelectorAll("[data-log]").forEach((b) => b.onclick = () => run(null, async () => { state.app = await api("POST", `/api/applications/${a.id}/events`, { kind: b.dataset.log }); await loadList(); }));
+  $("#noteAdd") && ($("#noteAdd").onclick = () => { const detail = $("#noteTxt").value.trim(); if (!detail) return; run(null, async () => { state.app = await api("POST", `/api/applications/${a.id}/events`, { kind: "note", detail }); }); });
+  $("#noteTxt") && ($("#noteTxt").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("#noteAdd").click(); } });
+  document.querySelectorAll("[data-ev-del]").forEach((b) => b.onclick = () => run(null, async () => { state.app = await api("DELETE", `/api/events/${b.dataset.evDel}`); }));
+  $("#prepBtn") && ($("#prepBtn").onclick = () => enqueue(`/api/applications/${a.id}/prep`, {}));
   $("#editJob") && ($("#editJob").onclick = () => { state.editJob = true; render(); });
   document.querySelectorAll("[data-fit]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/fit`, {}));
   document.querySelectorAll("[data-reextract]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/reextract`, { source: b.dataset.reextract }));
@@ -723,8 +778,10 @@ function bind() {
   $("#delBtn").onclick = async () => { if (confirm(`Delete ${a.company} — ${a.role}? Files on disk are kept.`)) { await api("DELETE", `/api/applications/${a.id}`); state.sel = null; state.app = null; await refresh(); } };
 
   document.querySelectorAll("[data-gen]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/generate`, { what: b.dataset.gen }));
+  document.querySelectorAll("[data-diff]").forEach((b) => b.onclick = () => { state.diffAgainst = b.dataset.diff; render(); });
   document.querySelectorAll("[data-docmode]").forEach((b) => b.onclick = () => {
     state.docMode = b.dataset.docmode; render();
+    if (state.docMode === "diff" && state.baseResume == null) api("GET", "/api/profile/resume").then((r) => { state.baseResume = r.markdown; if (state.docMode === "diff") render(); }).catch(() => { state.baseResume = ""; });
     if (state.docMode === "tex") {
       const doc = a.documents.find((d) => d.kind === state.tab);
       if (doc && state.tex?.id !== doc.id) api("GET", `/api/documents/${doc.id}/tex`).then((t) => { state.tex = { id: doc.id, ...t }; if (state.docMode === "tex") render(); });

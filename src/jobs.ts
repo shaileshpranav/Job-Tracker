@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, type Application } from "./db.ts";
 import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
-import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, type JobExtract } from "./ai.ts";
+import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, interviewPrep, type JobExtract } from "./ai.ts";
 import { compilePdf } from "./latex.ts";
 import { registerJob, enqueue, NeedsYou } from "./queue.ts";
 import { loadResume, loadNotes } from "./profile.ts";
@@ -198,6 +198,15 @@ registerJob("learn", async ({ document_id }, _job, progress) => {
   db.prepare("UPDATE documents SET original = content WHERE id = ?").run(doc.id); // these edits are now accounted for
   logEvent(doc.application_id, "learned", `${doc.kind === "resume" ? "Resume" : "Cover letter"} format rules updated (${rules.length} rules)`);
   return { application_id: doc.application_id, kind: doc.kind, rules: rules.length, observed };
+});
+
+registerJob("prep", async (_p, job, progress) => {
+  const app = mustApp(String(job.application_id));
+  progress("Preparing your interview sheet…");
+  const md = await interviewPrep(await ctxFor(app), app.fit_json ? JSON.parse(app.fit_json) : null);
+  const id = saveDocument(app, "prep", md);
+  logEvent(app.id, "generated", "Interview prep sheet");
+  return { application_id: app.id, document_id: id };
 });
 
 registerJob("import", async (_p, _job, progress) => {
