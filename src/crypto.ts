@@ -12,10 +12,14 @@ const ENC_PREFIX = "v1:";
 let cached: Buffer | null = null;
 function secret(): Buffer {
   if (cached) return cached;
-  cached = fs.existsSync(KEY_PATH)
-    ? Buffer.from(fs.readFileSync(KEY_PATH, "utf8").trim(), "hex")
-    : crypto.randomBytes(32);
-  if (!fs.existsSync(KEY_PATH)) fs.writeFileSync(KEY_PATH, cached.toString("hex"), { mode: 0o600 });
+  if (fs.existsSync(KEY_PATH)) {
+    const key = Buffer.from(fs.readFileSync(KEY_PATH, "utf8").trim(), "hex");
+    if (key.length !== 32) throw new Error(`${KEY_PATH} is corrupt (expected 64 hex chars). Restore it from a backup, or delete it and re-enter API keys / password.`);
+    cached = key;
+  } else {
+    cached = crypto.randomBytes(32);
+    fs.writeFileSync(KEY_PATH, cached.toString("hex"), { mode: 0o600 });
+  }
   return cached;
 }
 
@@ -62,17 +66,21 @@ export function timingSafeEqualStr(a: string, b: string): boolean {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-/** Stateless session token — a signed expiry timestamp, so no server-side store is needed. */
-export function signSession(expiresAt: number): string {
-  const mac = crypto.createHmac("sha256", secret()).update(String(expiresAt)).digest("hex");
+/**
+ * Stateless session token — a signed expiry timestamp, so no server-side store
+ * is needed. `generation` is bumped whenever the password changes, which
+ * invalidates every existing session.
+ */
+export function signSession(expiresAt: number, generation: string): string {
+  const mac = crypto.createHmac("sha256", secret()).update(`${expiresAt}.${generation}`).digest("hex");
   return `${expiresAt}.${mac}`;
 }
 
-export function verifySession(token: string): boolean {
+export function verifySession(token: string, generation: string): boolean {
   const [expiresAtStr, mac] = token.split(".");
   if (!expiresAtStr || !mac) return false;
   const expiresAt = Number(expiresAtStr);
   if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return false;
-  const expected = crypto.createHmac("sha256", secret()).update(expiresAtStr).digest("hex");
+  const expected = crypto.createHmac("sha256", secret()).update(`${expiresAtStr}.${generation}`).digest("hex");
   return timingSafeEqualStr(mac, expected);
 }

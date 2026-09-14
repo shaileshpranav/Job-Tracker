@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {

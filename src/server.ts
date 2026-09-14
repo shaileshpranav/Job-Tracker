@@ -2,131 +2,30 @@ import http from "node:http";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
-import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
-import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, resumeSize, ONE_PAGE, type JobExtract } from "./ai.ts";
-import { compilePdf, compileTex, latexAvailable, renderTex, markdownToTex, contentHash, readTemplate, writeTemplate } from "./latex.ts";
+import { db, getApp, logEvent, slugify, touch, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
+import { resumeSize, ONE_PAGE } from "./ai.ts";
+import { renderTex, contentHash, readTemplate, writeTemplate } from "./latex.ts";
 import { listPrompts, savePrompt } from "./prompts.ts";
-import { registerJob, enqueue, listJobs, getJob, cancelJob, retryJob, resumeJob, resumeMatching, clearFinishedJobs, NeedsYou, type Progress } from "./queue.ts";
-import { loadResume, loadNotes, profileStatus } from "./profile.ts";
+import { enqueue, listJobs, getJob, cancelJob, retryJob, resumeJob, resumeMatching, clearFinishedJobs } from "./queue.ts";
+import { profileStatus } from "./profile.ts";
 import { printPage } from "./markdown.ts";
-import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, authStatus, authRequired, verifyAuthPassword, setAuthPassword, type Provider, type Task, type StyleKind } from "./settings.ts";
+import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, authStatus, authRequired, setAuthPassword, type Provider, type Task, type StyleKind } from "./settings.ts";
 import { listModels } from "./llm.ts";
-import { stats, getGoals, saveGoals, checkAchievements, listAchievements } from "./goals.ts";
-import { signSession, verifySession } from "./crypto.ts";
+import { stats, saveGoals, checkAchievements, listAchievements } from "./goals.ts";
+import { HttpError, readJson, send } from "./http.ts";
+import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
+import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
+import { hostOf } from "./jobs.ts";
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? "0.0.0.0"; // reachable from your phone on the same Wi-Fi; set HOST=127.0.0.1 to keep it local-only
 const PUBLIC = path.join(import.meta.dirname, "public");
 
-// ---------- auth (optional — off unless a password is set via AUTH_PASSWORD or ⚙ Settings) ----------
-
-const SESSION_COOKIE = "jt_session";
-const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
-
-function cookies(req: http.IncomingMessage): Record<string, string> {
-  const header = req.headers.cookie;
-  if (!header) return {};
-  const out: Record<string, string> = {};
-  for (const part of header.split(";")) {
-    const i = part.indexOf("=");
-    if (i < 0) continue;
-    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
-  }
-  return out;
-}
-function isAuthed(req: http.IncomingMessage): boolean {
-  return !authRequired() || Boolean(verifySession(cookies(req)[SESSION_COOKIE] ?? ""));
-}
-function setSessionCookie(res: http.ServerResponse) {
-  const token = signSession(Date.now() + SESSION_MS);
-  res.setHeader("set-cookie", `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_MS / 1000)}`);
-}
-function clearSessionCookie(res: http.ServerResponse) {
-  res.setHeader("set-cookie", `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
-}
-/** Reachable without a session: login itself, static JS, and the bookmarklet's
- * cross-origin capture drop (it only queues page text for the app to claim
- * after login — nothing readable comes back from it). */
-function isPublicRoute(method: string | undefined, pathname: string): boolean {
-  if (pathname === "/api/login" && method === "POST") return true;
-  if (pathname === "/app.js" && method === "GET") return true;
-  if (pathname === "/favicon.ico" && method === "GET") return true;
-  if (pathname === "/api/bookmarklet" && method === "GET") return true;
-  if (pathname === "/api/captures" && (method === "POST" || method === "OPTIONS")) return true;
-  return false;
-}
-const LOGIN_PAGE = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Job Tracker</title>
-<script>try{const t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}</script>
-<style>
-  :root { --bg:#f4f4f1; --panel:#ffffff; --ink:#1b1b1a; --mute:#6b6b68; --line:#e4e4df; --accent:#2f5bea; --accent-ink:#fff; --bad:#b83232; --shadow:0 1px 2px rgba(20,20,20,.04),0 6px 20px rgba(20,20,20,.05); }
-  [data-theme="dark"] { --bg:#121315; --panel:#1b1d20; --ink:#e8e8e6; --mute:#9a9a97; --line:#2c2f34; --accent:#6f8cff; --accent-ink:#0d1220; color-scheme:dark; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#121315; --panel:#1b1d20; --ink:#e8e8e6; --mute:#9a9a97; --line:#2c2f34; --accent:#6f8cff; --accent-ink:#0d1220; color-scheme:dark; } }
-  * { box-sizing:border-box; }
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Helvetica,Arial,sans-serif; background:var(--bg); color:var(--ink); }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:28px 26px; width:min(340px, 90vw); }
-  h1 { font-size:16px; margin:0 0 4px; } h1::before { content:"◆"; color:var(--accent); margin-right:8px; }
-  p.muted { color:var(--mute); margin:0 0 18px; font-size:13px; }
-  input { font:inherit; width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--ink); margin-bottom:10px; }
-  input:focus { outline:none; border-color:var(--accent); }
-  button { font:inherit; font-weight:500; width:100%; padding:9px 11px; border:1px solid var(--accent); border-radius:8px; background:var(--accent); color:var(--accent-ink); cursor:pointer; }
-  button:disabled { opacity:.6; cursor:default; }
-  .err { color:var(--bad); font-size:13px; margin:0 0 10px; min-height:16px; }
-</style>
-</head>
-<body>
-  <form class="card" id="f">
-    <h1>Job Tracker</h1>
-    <p class="muted">Enter the password to continue.</p>
-    <p class="err" id="err"></p>
-    <input id="pw" type="password" autocomplete="current-password" placeholder="Password" autofocus>
-    <button id="go">Log in</button>
-  </form>
-<script>
-  const f = document.getElementById("f"), pw = document.getElementById("pw"), err = document.getElementById("err"), go = document.getElementById("go");
-  f.onsubmit = async (e) => {
-    e.preventDefault();
-    err.textContent = ""; go.disabled = true; go.textContent = "Checking…";
-    try {
-      const res = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: pw.value }) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Incorrect password");
-      location.href = "/";
-    } catch (e) { err.textContent = e.message; go.disabled = false; go.textContent = "Log in"; }
-  };
-</script>
-</body>
-</html>`;
-
 /** Page text handed over by the bookmarklet, waiting for the app page to claim it. */
 const pendingCaptures: { ts: number; url: string; title: string; text: string; resumed_job?: number; label?: string }[] = [];
 
-class HttpError extends Error {
-  status: number;
-  constructor(status: number, msg: string) { super(msg); this.status = status; }
-}
-
 // ---------- helpers ----------
 
-const MAX_BODY = 8 * 1024 * 1024;
-async function readJson(req: http.IncomingMessage): Promise<any> {
-  let body = "";
-  for await (const chunk of req) {
-    body += chunk;
-    if (body.length > MAX_BODY) throw new HttpError(413, "Request body too large");
-  }
-  if (!body.trim()) return {};
-  try { return JSON.parse(body); } catch { throw new HttpError(400, "Body is not valid JSON"); }
-}
-function send(res: http.ServerResponse, status: number, body: unknown, type = "application/json") {
-  res.writeHead(status, { "content-type": type, "cache-control": "no-store" });
-  res.end(type === "application/json" ? JSON.stringify(body) : (body as string));
-}
 function mustApp(id: string): Application {
   const app = getApp(Number(id));
   if (!app) throw new HttpError(404, "Application not found");
@@ -142,226 +41,9 @@ function appDetail(app: Application) {
     documents: (db.prepare("SELECT id, kind, file, created_at, content, pages, pdf_hash, tex IS NOT NULL AS custom_tex, original IS NOT NULL AND original != content AS edited FROM documents WHERE application_id = ? ORDER BY id DESC").all(app.id) as any[])
       .map(({ pdf_hash, ...d }) => ({ ...d, custom_tex: Boolean(d.custom_tex), edited: Boolean(d.edited), size: resumeSize(d.content), pdf_current: pdf_hash === contentHash(d.custom_tex ? (db.prepare("SELECT tex FROM documents WHERE id = ?").get(d.id) as any).tex : d.content) })),
     one_page: ONE_PAGE,
-    latex: latexReady,
+    latex: isLatexReady(),
     questions: db.prepare("SELECT * FROM questions WHERE application_id = ? ORDER BY id").all(app.id),
     events: db.prepare("SELECT * FROM events WHERE application_id = ? ORDER BY id DESC").all(app.id),
-  };
-}
-
-function createApplication(job: JobExtract, url: string | null, sourceText: string): Application {
-  const info = db.prepare(
-    `INSERT INTO applications (company, role, location, url, salary, description, requirements, source_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(job.company, job.role, job.location || null, url, job.salary || null, job.description, JSON.stringify(job.requirements), sourceText);
-  const id = Number(info.lastInsertRowid);
-  const folder = `${String(id).padStart(3, "0")}-${slugify(job.company)}-${slugify(job.role)}`;
-  db.prepare("UPDATE applications SET folder = ? WHERE id = ?").run(folder, id);
-  fs.mkdirSync(path.join(APPS_DIR, folder), { recursive: true });
-  writeJobFile(getApp(id)!);
-  logEvent(id, "created", url ? `Captured from ${url}` : "Entered manually");
-  if (job.application_questions.length) {
-    logEvent(id, "questions_found", job.application_questions.join("\n"));
-  }
-  return getApp(id)!;
-}
-
-let latexReady = false;
-latexAvailable().then((ok) => { latexReady = ok; console.log(ok ? "LaTeX found → PDF export enabled" : "LaTeX not found → PDF export uses browser print"); });
-
-/** Name/contact header for cover letters, taken from the base resume. */
-async function letterHeader() {
-  try { const { name, contact } = markdownToTex(await loadResume()); return { name, contact }; } catch { return undefined; }
-}
-
-/** Compile a document to PDF, cache it next to the Markdown, record the page count. */
-async function buildPdf(docId: number) {
-  const doc = db.prepare("SELECT d.*, a.folder FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(docId) as any;
-  if (!doc) throw new HttpError(404, "Document not found");
-  const hash = contentHash(doc.tex ?? doc.content);
-  const pdfPath = path.join(APPS_DIR, doc.folder, doc.kind === "resume" ? "resume.pdf" : "cover-letter.pdf");
-  if (doc.pdf_hash === hash && fs.existsSync(pdfPath)) return { pdf: fs.readFileSync(pdfPath), pages: doc.pages as number };
-  const r = doc.tex ? await compileTex(doc.tex) : await compilePdf(doc.content, doc.kind, doc.kind === "cover_letter" ? await letterHeader() : undefined);
-  fs.writeFileSync(path.join(APPS_DIR, doc.folder, doc.kind === "resume" ? "resume.tex" : "cover-letter.tex"), r.tex);
-  fs.writeFileSync(pdfPath, r.pdf);
-  db.prepare("UPDATE documents SET pages = ?, pdf = ?, pdf_hash = ? WHERE id = ?").run(r.pages, path.relative(ROOT, pdfPath), hash, doc.id);
-  return { pdf: r.pdf, pages: r.pages };
-}
-
-function fitInBackground(appId: number) {
-  if (!fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) return; // nothing to compare against yet
-  const app = getApp(appId)!;
-  enqueue("fit", `Fit score — ${app.company}`, {}, appId);
-}
-
-const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
-
-/**
- * Fetch a posting, or park the job and ask the user to open the page. We never
- * attempt to solve or bypass a verification check — the user passes it in their
- * own browser and hands the page over (bookmarklet or paste).
- */
-async function captureOrAsk(url: string, verifiedText?: string) {
-  try {
-    return await captureFromUrl(url, verifiedText);
-  } catch (e) {
-    if (!(e instanceof CaptureBlocked)) throw e;
-    throw new NeedsYou({
-      type: "verify",
-      url: e.url,
-      host: hostOf(e.url) || e.url,
-      reason: e.reason,
-      message: `${hostOf(e.url) || "The site"} needs a human: ${e.reason}.`,
-    });
-  }
-}
-
-// ---------- job handlers (the actual work; routes only enqueue) ----------
-
-registerJob("capture", async (body, _job, progress) => {
-  let job: JobExtract, sourceText: string;
-  if (body.url && !body.description) {
-    progress(body.verified_text ? "Reading the page you verified…" : "Fetching the posting…");
-    ({ source_text: sourceText, ...job } = await captureOrAsk(body.url.trim(), body.verified_text));
-  } else if (body.description) {
-    // Manual paste / bookmarklet: still run extraction so requirements/questions get structured.
-    progress("Extracting job details…");
-    sourceText = `${body.title ? `Page title: ${body.title}\n` : ""}${body.company ?? ""}\n${body.role ?? ""}\n\n${body.description}`;
-    job = await extractJob(sourceText, body.url ?? "");
-    if (body.company) job.company = body.company;
-    if (body.role) job.role = body.role;
-  } else throw new Error("Provide a url or a description");
-  const app = createApplication(job, body.url?.trim() || null, sourceText);
-  fitInBackground(app.id);
-  return { application_id: app.id, company: app.company, role: app.role };
-});
-
-registerJob("reextract", async ({ source = "description", verified_text }, job, progress) => {
-  const app = mustApp(String(job.application_id));
-  let extracted: JobExtract, sourceText = app.source_text;
-  if (source === "url") {
-    if (!app.url) throw new Error("This application has no posting URL");
-    progress(verified_text ? "Reading the page you verified…" : "Fetching the posting again…");
-    ({ source_text: sourceText, ...extracted } = await captureOrAsk(app.url, verified_text));
-  } else {
-    const text = app.source_text?.trim() || app.description?.trim();
-    if (!text) throw new Error("Nothing to extract from — edit the job and paste a description first");
-    progress("Re-reading the description…");
-    extracted = await extractJob(app.source_text ? text : `${app.company}\n${app.role}\n\n${text}`, app.url ?? "");
-  }
-  db.prepare(`UPDATE applications SET company = ?, role = ?, location = ?, salary = ?, description = ?, requirements = ?, source_text = ? WHERE id = ?`).run(
-    extracted.company.trim() || app.company, extracted.role.trim() || app.role, extracted.location || app.location, extracted.salary || app.salary,
-    extracted.description.trim() || app.description, JSON.stringify(extracted.requirements), sourceText, app.id,
-  );
-  touch(app.id);
-  writeJobFile(getApp(app.id)!);
-  logEvent(app.id, "reextracted", source === "url" ? "Fetched the posting again" : "Re-read the description");
-  const hasQ = (db.prepare("SELECT COUNT(*) AS n FROM questions WHERE application_id = ?").get(app.id) as any).n > 0;
-  if (extracted.application_questions.length && !hasQ) logEvent(app.id, "questions_found", extracted.application_questions.join("\n"));
-  fitInBackground(app.id);
-  return { application_id: app.id };
-});
-
-registerJob("fit", async (_p, job, progress) => {
-  const appId = job.application_id!;
-  db.prepare("UPDATE applications SET fit_status = 'pending' WHERE id = ?").run(appId);
-  try {
-    progress("Comparing the posting with your base resume…");
-    const fit = await scoreFit(await ctxFor(getApp(appId)!));
-    db.prepare("UPDATE applications SET fit_score = ?, fit_json = ?, fit_status = 'done' WHERE id = ?").run(fit.score, JSON.stringify(fit), appId);
-    logEvent(appId, "fit", `Scored ${fit.score}/5 — ${fit.verdict}`);
-    return { application_id: appId, score: fit.score };
-  } catch (e: any) {
-    db.prepare("UPDATE applications SET fit_status = 'error', fit_json = ? WHERE id = ?").run(JSON.stringify({ error: e.message }), appId);
-    throw e;
-  } finally { touch(appId); }
-});
-
-registerJob("generate", async ({ what = "both" }, job, progress) => {
-  const app = mustApp(String(job.application_id));
-  const ctx = await ctxFor(app);
-  const out: Record<string, string> = {};
-  if (what === "resume" || what === "both") {
-    progress("Drafting the tailored resume…");
-    let md = await tailorResume(ctx);
-    let note = "Tailored resume";
-    if (latexReady) {
-      progress("Compiling PDF to measure pages…");
-      let pages = (await compilePdf(md, "resume").catch(() => null))?.pages ?? null;
-      if (pages !== null && pages > 1) {
-        progress(`Draft is ${pages} pages — condensing…`);
-        md = await condenseResume(ctx, md, pages);
-        pages = (await compilePdf(md, "resume").catch(() => null))?.pages ?? null;
-        note += ` (condensed → ${pages ?? "?"} page${pages === 1 ? "" : "s"})`;
-      }
-    } else if (looksTooLong(md)) {
-      progress("Draft looks long — condensing…");
-      md = await condenseResume(ctx, md);
-      note += " (condensed)";
-    }
-    out.resume = md;
-    const id = saveDocument(app, "resume", md);
-    if (latexReady) { progress("Building resume PDF…"); await buildPdf(id).catch((e) => console.error("PDF build failed:", e.message)); }
-    logEvent(app.id, "generated", note);
-  }
-  if (what === "cover_letter" || what === "both") {
-    progress("Writing the cover letter…");
-    const latest = out.resume ?? (db.prepare("SELECT content FROM documents WHERE application_id = ? AND kind = 'resume' ORDER BY id DESC LIMIT 1").get(app.id) as any)?.content ?? ctx.resume;
-    out.cover_letter = await writeCoverLetter(ctx, latest);
-    const id = saveDocument(app, "cover_letter", out.cover_letter);
-    if (latexReady) { progress("Building cover letter PDF…"); await buildPdf(id).catch((e) => console.error("PDF build failed:", e.message)); }
-    logEvent(app.id, "generated", "Cover letter");
-  }
-  return { application_id: app.id, what };
-});
-
-registerJob("condense", async ({ document_id }, job, progress) => {
-  const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(Number(document_id)) as any;
-  if (!doc || doc.kind !== "resume") throw new Error("Resume not found");
-  const app = mustApp(String(doc.application_id));
-  progress("Condensing to one page…");
-  const md = await condenseResume(await ctxFor(app), doc.content, doc.pages ?? undefined);
-  const id = saveDocument(app, "resume", md);
-  if (latexReady) { progress("Building PDF…"); await buildPdf(id).catch((e) => console.error("PDF build failed:", e.message)); }
-  logEvent(app.id, "generated", "Condensed resume");
-  return { application_id: app.id, document_id: id };
-});
-
-registerJob("questions", async ({ questions }, job, progress) => {
-  const app = mustApp(String(job.application_id));
-  const qs: string[] = (questions as string[]).map((q) => q.trim()).filter(Boolean);
-  progress(`Drafting ${qs.length} answer${qs.length === 1 ? "" : "s"}…`);
-  const ctx = await ctxFor(app);
-  const prior = db.prepare("SELECT question, answer FROM questions WHERE application_id != ? ORDER BY id DESC LIMIT 40").all(app.id) as any[];
-  const answers = await answerQuestions(ctx, qs, prior);
-  const ins = db.prepare("INSERT INTO questions (application_id, question, answer) VALUES (?, ?, ?)");
-  for (const a of answers) ins.run(app.id, a.question, a.answer);
-  writeQuestionsFile(app);
-  logEvent(app.id, "questions", `${answers.length} answered`);
-  return { application_id: app.id, count: answers.length };
-});
-
-registerJob("learn", async ({ document_id }, _job, progress) => {
-  const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(Number(document_id)) as any;
-  if (!doc) throw new Error("Document not found");
-  if (!doc.original || doc.original === doc.content) throw new Error("This version has no manual edits to learn from");
-  progress(`Comparing your edits with the generated ${doc.kind === "resume" ? "resume" : "cover letter"}…`);
-  const { rules, observed } = await learnStyle(doc.kind, doc.original, doc.content);
-  saveStyle(doc.kind, rules.map((r) => `- ${r}`).join("\n"));
-  db.prepare("UPDATE documents SET original = content WHERE id = ?").run(doc.id); // these edits are now accounted for
-  logEvent(doc.application_id, "learned", `${doc.kind === "resume" ? "Resume" : "Cover letter"} format rules updated (${rules.length} rules)`);
-  return { application_id: doc.application_id, kind: doc.kind, rules: rules.length, observed };
-});
-
-registerJob("import", async (_p, _job, progress) => {
-  progress("Converting your resume to Markdown…");
-  await loadResume();
-  return { ok: true };
-});
-
-async function ctxFor(app: Application) {
-  return {
-    resume: await loadResume(),
-    notes: loadNotes(),
-    job: { company: app.company, role: app.role, description: app.description ?? "", requirements: app.requirements ? JSON.parse(app.requirements) : [] },
   };
 }
 
@@ -426,10 +108,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   // auth
   if (m("POST", /^\/api\/login$/)) {
     const { password } = await readJson(req);
-    if (typeof password !== "string" || !verifyAuthPassword(password)) {
-      await new Promise((r) => setTimeout(r, 300)); // slow down brute-forcing a little
-      throw new HttpError(401, "Incorrect password");
-    }
+    await attemptLogin(req.socket.remoteAddress ?? "?", password);
     setSessionCookie(res);
     return send(res, 200, { ok: true });
   }
@@ -443,8 +122,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   // LLM settings
-  if (m("GET", /^\/api\/settings$/)) return send(res, 200, { ...llmSettings(), providers: PROVIDERS, latex: latexReady, auth: authStatus() });
-  if (m("PUT", /^\/api\/settings$/)) return send(res, 200, { ...saveLlmSettings(await readJson(req)), providers: PROVIDERS, latex: latexReady, auth: authStatus() });
+  if (m("GET", /^\/api\/settings$/)) return send(res, 200, { ...llmSettings(), providers: PROVIDERS, latex: isLatexReady(), auth: authStatus() });
+  if (m("PUT", /^\/api\/settings$/)) return send(res, 200, { ...saveLlmSettings(await readJson(req)), providers: PROVIDERS, latex: isLatexReady(), auth: authStatus() });
   if ((r = m("PUT", /^\/api\/settings\/tasks\/(\w+)$/))) {
     const body = await readJson(req);
     return send(res, 200, { ...saveTaskRoute(r[1] as Task, body.reset ? null : body), providers: PROVIDERS });
@@ -492,6 +171,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
       if (!(k in body)) continue;
       if (k === "status" && !STATUSES.includes(body.status)) throw new HttpError(400, "Bad status");
       if ((k === "company" || k === "role") && !String(body[k] ?? "").trim()) throw new HttpError(400, `${k} cannot be empty`);
+      if (k === "applied_at" && body.applied_at && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.applied_at))) throw new HttpError(400, "applied_at must be YYYY-MM-DD");
       const value = k === "requirements" ? JSON.stringify(Array.isArray(body.requirements) ? body.requirements.map(String) : []) : body[k] === undefined ? null : body[k];
       db.prepare(`UPDATE applications SET ${k} = ? WHERE id = ?`).run(value, app.id);
       if (k === "description" && body.description !== app.description) db.prepare("UPDATE applications SET source_text = ? WHERE id = ?").run(body.description, app.id);
@@ -550,7 +230,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     if (doc.file) fs.writeFileSync(path.join(ROOT, doc.file), content);
     touch(doc.application_id);
     let pdfError: string | null = null;
-    if (latexReady) await buildPdf(doc.id).catch((e) => { pdfError = e.message; });
+    if (isLatexReady()) await buildPdf(doc.id).catch((e) => { pdfError = e.message; });
     return send(res, 200, { ok: true, pdfError, texReset: doc.tex !== null });
   }
   // hand-editable LaTeX per document
@@ -646,21 +326,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   throw new HttpError(404, "Not found");
-}
-
-function writeJobFile(app: Application) {
-  const reqs: string[] = app.requirements ? JSON.parse(app.requirements) : [];
-  fs.writeFileSync(
-    path.join(APPS_DIR, app.folder!, "job.md"),
-    `# ${app.role} — ${app.company}\n\n${app.url ? `Source: ${app.url}\n` : ""}${app.location ? `Location: ${app.location}\n` : ""}${app.salary ? `Salary: ${app.salary}\n` : ""}\n## Requirements\n${reqs.map((r) => `- ${r}`).join("\n")}\n\n## Description\n${app.description ?? ""}\n`,
-  );
-}
-
-function writeQuestionsFile(app: Application) {
-  const qs = db.prepare("SELECT question, answer FROM questions WHERE application_id = ? ORDER BY id").all(app.id) as any[];
-  const md = `# Application questions — ${app.company}\n\n` + qs.map((q) => `## ${q.question}\n\n${q.answer}\n`).join("\n");
-  fs.writeFileSync(path.join(APPS_DIR, app.folder!, "questions.md"), md);
-  touch(app.id);
 }
 
 http.createServer(async (req, res) => {
