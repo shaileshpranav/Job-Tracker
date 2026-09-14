@@ -139,3 +139,15 @@ export async function learnStyle(kind: StyleKind, original: string, edited: stri
   );
   return { rules: res.rules.map((r) => r.replace(/^[-*•]\s*/, "").trim()).filter(Boolean).slice(0, 25), observed: res.changes_observed };
 }
+
+// ---------- Interview prep ----------
+
+export function interviewPrep(c: Ctx, fit: Fit | null) {
+  const fitBlock = fit
+    ? `\n\n<fit_assessment score="${fit.score}/5">\nVerdict: ${fit.verdict}\nMet: ${fit.met.join("; ") || "-"}\nPartial: ${fit.partial.join("; ") || "-"}\nMissing: ${fit.missing.join("; ") || "-"}\n</fit_assessment>`
+    : "";
+  return getLLM("prep").generate(
+    `${getPrompt("prep")} ${getPrompt("honesty")}\n\n${profileBlock(c)}`,
+    `${jobBlock(c.job)}${fitBlock}\n\nWrite the prep sheet now. Output only the Markdown.`,
+  );
+}

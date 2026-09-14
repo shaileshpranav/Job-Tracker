@@ -15,6 +15,7 @@ export const TASKS = {
   cover_letter: "Cover letter",
   questions: "Application answers",
   learn: "Learn formatting from my edits",
+  prep: "Interview prep",
 } as const;
 
 /** Formatting preferences learned from the user's manual edits, per document kind. */

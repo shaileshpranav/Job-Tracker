@@ -57,6 +57,7 @@ db.exec("PRAGMA foreign_keys = ON");
 const cols = new Set((db.prepare("PRAGMA table_info(applications)").all() as { name: string }[]).map((c) => c.name));
 if (!cols.has("source_text")) db.exec("ALTER TABLE applications ADD COLUMN source_text TEXT"); // raw page/pasted text the extraction ran on
 if (!cols.has("fit_score")) db.exec("ALTER TABLE applications ADD COLUMN fit_score INTEGER; ALTER TABLE applications ADD COLUMN fit_json TEXT; ALTER TABLE applications ADD COLUMN fit_status TEXT");
+if (!cols.has("next_action_at")) db.exec("ALTER TABLE applications ADD COLUMN next_action_at TEXT; ALTER TABLE applications ADD COLUMN next_action TEXT; ALTER TABLE applications ADD COLUMN followed_up_at TEXT");
 const dcols = new Set((db.prepare("PRAGMA table_info(documents)").all() as { name: string }[]).map((c) => c.name));
 if (!dcols.has("pages")) db.exec("ALTER TABLE documents ADD COLUMN pages INTEGER; ALTER TABLE documents ADD COLUMN pdf TEXT; ALTER TABLE documents ADD COLUMN pdf_hash TEXT");
 if (!dcols.has("tex")) db.exec("ALTER TABLE documents ADD COLUMN tex TEXT"); // hand-edited LaTeX, overrides the generated TeX for the PDF
@@ -70,6 +71,7 @@ export interface Application {
   salary: string | null; description: string | null; requirements: string | null;
   status: Status; applied_at: string | null; notes: string; folder: string | null; source_text: string | null;
   fit_score: number | null; fit_json: string | null; fit_status: "pending" | "done" | "error" | null;
+  next_action_at: string | null; next_action: string | null; followed_up_at: string | null;
   created_at: string; updated_at: string;
 }
 
@@ -89,7 +91,7 @@ export function touch(appId: number) {
 export function saveDocument(app: Application, kind: string, content: string) {
   const dir = path.join(APPS_DIR, app.folder!);
   fs.mkdirSync(dir, { recursive: true });
-  const filename = kind === "cover_letter" ? "cover-letter.md" : `${kind}.md`;
+  const filename = { cover_letter: "cover-letter.md", prep: "interview-prep.md" }[kind] ?? `${kind}.md`;
   const file = path.join(dir, filename);
   fs.writeFileSync(file, content);
   const info = db.prepare("INSERT INTO documents (application_id, kind, content, original, file) VALUES (?, ?, ?, ?, ?)")
