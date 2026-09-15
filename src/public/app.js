@@ -61,10 +61,13 @@ async function api(method, url, body) {
 // in the DOM; handlers must still read inputs before their first `await`.
 async function run(label, fn) {
   state.err = null;
-  const pending = fn();
+  let pending;
+  try { pending = fn(); } catch (e) { state.err = e.message; render(true); return; }
   if (label) { state.busy = label; render(); }
   try { await pending; } catch (e) { state.err = e.message; }
-  state.busy = null; render();
+  state.busy = null;
+  // A rendering bug must never leave the spinner stuck: clear it first, then report.
+  try { render(true); } catch (e) { $("#busyPill").hidden = true; state.err = `Display error: ${e.message}`; console.error(e); try { render(true); } catch {} }
 }
 
 // ---------- tasks (queue) ----------

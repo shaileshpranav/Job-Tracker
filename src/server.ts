@@ -149,11 +149,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   // LLM settings
-  if (m("GET", /^\/api\/settings$/)) return send(res, 200, { ...llmSettings(), providers: PROVIDERS, latex: isLatexReady(), auth: authStatus() });
-  if (m("PUT", /^\/api\/settings$/)) return send(res, 200, { ...saveLlmSettings(await readJson(req)), providers: PROVIDERS, latex: isLatexReady(), auth: authStatus() });
+  // Every settings response has the same shape — the client swaps the whole object in.
+  const settingsPayload = () => ({ ...llmSettings(), providers: PROVIDERS, latex: isLatexReady(), auth: authStatus() });
+  if (m("GET", /^\/api\/settings$/)) return send(res, 200, settingsPayload());
+  if (m("PUT", /^\/api\/settings$/)) { saveLlmSettings(await readJson(req)); return send(res, 200, settingsPayload()); }
   if ((r = m("PUT", /^\/api\/settings\/tasks\/(\w+)$/))) {
     const body = await readJson(req);
-    return send(res, 200, { ...saveTaskRoute(r[1] as Task, body.reset ? null : body), providers: PROVIDERS });
+    saveTaskRoute(r[1] as Task, body.reset ? null : body);
+    return send(res, 200, settingsPayload());
   }
   if (m("GET", /^\/api\/models$/)) {
     const provider = url.searchParams.get("provider") as Provider;
