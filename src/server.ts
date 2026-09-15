@@ -7,7 +7,8 @@ import { resumeSize, ONE_PAGE } from "./ai.ts";
 import { renderTex, contentHash, readTemplate, writeTemplate } from "./latex.ts";
 import { listPrompts, savePrompt } from "./prompts.ts";
 import { enqueue, listJobs, getJob, cancelJob, retryJob, resumeJob, resumeMatching, clearFinishedJobs } from "./queue.ts";
-import { profileStatus } from "./profile.ts";
+import { profileStatus, loadResume, saveResume, deleteResume, hasAnyResume, listResumes, DEFAULT_KEY } from "./profile.ts";
+import { atsCheck } from "./ats.ts";
 import { printPage } from "./markdown.ts";
 import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, authStatus, authRequired, setAuthPassword, type Provider, type Task, type StyleKind } from "./settings.ts";
 import { listModels } from "./llm.ts";
@@ -34,10 +35,12 @@ function mustApp(id: string): Application {
   return app;
 }
 function appDetail(app: Application) {
-  const { source_text, fit_json, ...rest } = app;
+  const { source_text, fit_json, fit_all, ...rest } = app;
   return {
     ...rest,
     fit: fit_json ? JSON.parse(fit_json) : null,
+    fit_all: fit_all ? JSON.parse(fit_all) : null,
+    resumes: listResumes().filter((x) => x.hasMarkdown).map(({ key, label }) => ({ key, label })),
     has_source_text: Boolean(source_text?.trim()),
     requirements: app.requirements ? JSON.parse(app.requirements) : [],
     documents: (db.prepare("SELECT id, kind, file, created_at, content, pages, pdf_hash, tex IS NOT NULL AS custom_tex, original IS NOT NULL AND original != content AS edited FROM documents WHERE application_id = ? ORDER BY id DESC").all(app.id) as any[])
@@ -145,11 +148,24 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
 
   // profile
   if (m("GET", /^\/api\/profile$/)) return send(res, 200, profileStatus());
-  if (m("POST", /^\/api\/profile\/import$/)) return send(res, 202, { job: enqueue("import", "Import resume") });
+  if (m("POST", /^\/api\/profile\/import$/)) { const { key = DEFAULT_KEY } = await readJson(req); return send(res, 202, { job: enqueue("import", `Import resume${key === DEFAULT_KEY ? "" : ` (${key})`}`, { key }) }); }
   if (m("GET", /^\/api\/profile\/resume$/)) {
-    const p = path.join(PROFILE_DIR, "resume.md");
-    if (!fs.existsSync(p)) throw new HttpError(404, "No base resume yet — import one first");
-    return send(res, 200, { markdown: fs.readFileSync(p, "utf8") });
+    const key = url.searchParams.get("key") || DEFAULT_KEY;
+    if (!listResumes().some((r) => r.key === key && r.hasMarkdown)) throw new HttpError(404, "No such base resume yet — import one first");
+    return send(res, 200, { key, markdown: await loadResume(key) });
+  }
+  // base resumes: create (optionally copying another), edit, delete
+  if ((r = m("PUT", /^\/api\/profile\/resumes\/([\w.-]+)$/))) {
+    const body = await readJson(req);
+    const md = typeof body.markdown === "string" && body.markdown.trim() ? body.markdown : body.copyFrom ? await loadResume(String(body.copyFrom)) : null;
+    if (!md) throw new HttpError(400, "Provide markdown, or copyFrom an existing base");
+    const key = saveResume(r[1], md, body.label);
+    return send(res, 200, { key, resumes: listResumes() });
+  }
+  if ((r = m("DELETE", /^\/api\/profile\/resumes\/([\w.-]+)$/))) {
+    deleteResume(r[1]);
+    db.prepare("UPDATE applications SET resume_key = NULL, resume_pinned = 0 WHERE resume_key = ?").run(r[1]);
+    return send(res, 200, { resumes: listResumes() });
   }
 
   // jobs
@@ -190,6 +206,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const app = mustApp(r[1]);
     const body = await readJson(req);
     const before = "status" in body || "applied_at" in body ? stats() : null;
+    if ("resume_key" in body) {
+      const key = String(body.resume_key ?? "");
+      if (!listResumes().some((x) => x.key === key && x.hasMarkdown)) throw new HttpError(400, "Unknown base resume");
+      const all = app.fit_all ? JSON.parse(app.fit_all) : {};
+      const fit = all[key];
+      db.prepare("UPDATE applications SET resume_key = ?, resume_pinned = 1, fit_score = COALESCE(?, fit_score), fit_json = COALESCE(?, fit_json) WHERE id = ?").run(key, fit?.score ?? null, fit ? JSON.stringify(fit) : null, app.id);
+      logEvent(app.id, "edited", `Base resume set to “${listResumes().find((x) => x.key === key)?.label}”`);
+    }
     const allowed = ["company", "role", "location", "url", "salary", "status", "applied_at", "notes", "description", "requirements", "next_action_at", "next_action"] as const;
     for (const k of allowed) {
       if (!(k in body)) continue;
@@ -248,7 +272,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/prep$/))) {
     const app = mustApp(r[1]);
-    if (!fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) throw new HttpError(400, "Import your resume first");
+    if (!hasAnyResume()) throw new HttpError(400, "Import your resume first");
     return send(res, 202, { job: enqueue("prep", `Interview prep — ${app.company}`, {}, app.id) });
   }
 
@@ -263,7 +287,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const body = await readJson(req);
     const ids: number[] = Array.isArray(body.ids) && body.ids.length ? body.ids.map(Number) : unscoredIds(feedSettings().scorePerRefresh);
     if (!ids.length) throw new HttpError(400, "Nothing to score");
-    if (!fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) throw new HttpError(400, "Import your resume first");
+    if (!hasAnyResume()) throw new HttpError(400, "Import your resume first");
     return send(res, 202, { job: enqueue("feed_score", `Score ${ids.length} feed posting${ids.length === 1 ? "" : "s"}`, { ids }) });
   }
   if (m("POST", /^\/api\/feed\/test$/)) {
@@ -313,15 +337,32 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/fit$/))) {
     const app = mustApp(r[1]);
-    if (!fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) throw new HttpError(400, "Import your resume first");
+    if (!hasAnyResume()) throw new HttpError(400, "Import your resume first");
     return send(res, 202, { job: enqueue("fit", `Fit score — ${app.company}`, {}, app.id) });
   }
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/generate$/))) {
     const app = mustApp(r[1]);
-    const { what = "both" } = await readJson(req);
+    const body = await readJson(req);
+    const what = body.what ?? "both";
     const names: Record<string, string> = { resume: "Tailored resume", cover_letter: "Cover letter", both: "Resume + cover letter" };
     if (!names[what]) throw new HttpError(400, "Bad 'what'");
-    return send(res, 202, { job: enqueue("generate", `${names[what]} — ${app.company}`, { what }, app.id) });
+    const emphasize = Array.isArray(body.emphasize) ? body.emphasize.map(String).slice(0, 25) : [];
+    return send(res, 202, { job: enqueue("generate", `${names[what]}${emphasize.length ? " (ATS terms)" : ""} — ${app.company}`, { what, emphasize }, app.id) });
+  }
+  // ATS keyword check: deterministic comparison of a document (or a base resume) with the posting
+  if ((r = m("GET", /^\/api\/applications\/(\d+)\/ats$/))) {
+    const app = mustApp(r[1]);
+    const docParam = url.searchParams.get("doc") ?? "latest";
+    let text: string, label: string;
+    if (docParam === "base") { text = await loadResume(app.resume_key ?? undefined); label = "base resume"; }
+    else {
+      const doc = docParam === "latest"
+        ? db.prepare("SELECT * FROM documents WHERE application_id = ? AND kind = 'resume' ORDER BY id DESC LIMIT 1").get(app.id) as any
+        : db.prepare("SELECT * FROM documents WHERE id = ? AND application_id = ?").get(Number(docParam), app.id) as any;
+      if (!doc) { text = await loadResume(app.resume_key ?? undefined); label = "base resume"; }
+      else { text = doc.content; label = `resume v${(db.prepare("SELECT COUNT(*) AS n FROM documents WHERE application_id = ? AND kind = 'resume' AND id <= ?").get(app.id, doc.id) as any).n}`; }
+    }
+    return send(res, 200, { label, ...atsCheck(app.description ?? "", app.requirements ? JSON.parse(app.requirements) : [], text) });
   }
   if ((r = m("PUT", /^\/api\/documents\/(\d+)$/))) {
     const { content } = await readJson(req);

@@ -100,6 +100,14 @@ Storage folders can be moved with `DATA_DIR`, `APPLICATIONS_DIR`, `PROFILE_DIR` 
 
 Every model-backed action — capture, re-extract, fit score, resume/cover letter, condense, answers, resume import — is queued as a **task** and runs in the background, one at a time (set `JOB_CONCURRENCY=2` in `.env` to allow more if you're on hosted models). Buttons return instantly; the ⏱ button shows how many tasks are active and opens the Tasks panel with live progress, history, **Cancel** (queued tasks stop immediately; running ones stop at their next step) and **Retry**. The tab you're on shows an inline "working…" banner for its own tasks, and the app refreshes itself when a task finishes. Tasks are stored in SQLite, so a queue survives a restart (anything mid-flight when the server stopped is marked failed for retry).
 
+## Base resumes
+
+`profile/resume.md` is the default base. Add more as `profile/resume-<name>.md` (or drop `resume-<name>.pdf` and import it from **Settings → Base resumes**; you can also create one there as a copy of another and edit it in place). A first-line `<!-- label: Platform / backend -->` names it. With more than one base, **fit scoring runs against each** and the application uses the best-scoring one for tailoring, cover letters, answers and prep; the fit card shows every base's score and lets you pin a different one.
+
+## ATS keyword check
+
+On the Resume tab, above the document: a deterministic comparison (no model) of the current resume version — or the base resume before you generate — against the posting. Terms come from the extracted requirements (*required*) and technical terms in the description; aliases such as Postgres/PostgreSQL and k8s/Kubernetes count. Shows required and overall coverage, what's missing, what's found and how often, and flags keyword stuffing. **Regenerate with the missing required terms** asks the model to use those exact terms where truthful.
+
 ## Fit score
 
 Every captured posting is scored 1–5 against `profile/resume.md` in the background (★ badge in the sidebar; full card at the top of the Job tab): verdict, requirements **met / partial / missing**, and advice on framing. Use it to decide whether an application is worth the time. **↻ Re-score** after editing your base resume. Prompt is editable under Settings → Prompts; the model under Per-task models ("Fit score & gap list").
@@ -127,6 +135,8 @@ src/
   jobs.ts       background job handlers (capture, fit, generate, answers, …)
   documents.ts  per-application files: job.md, questions.md, LaTeX/PDF builds
   goals.ts      targets, streaks, XP, achievements
+  ats.ts        deterministic ATS keyword check
+  feed.ts       job feed sources, filters, store
   crypto.ts     at-rest encryption for saved keys, password hashing
   queue.ts      persistent task queue + worker
   ai.ts         prompt assembly (extraction, tailoring, answers)

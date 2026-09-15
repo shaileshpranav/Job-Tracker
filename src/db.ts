@@ -60,6 +60,7 @@ db.exec("PRAGMA foreign_keys = ON");
 const cols = new Set((db.prepare("PRAGMA table_info(applications)").all() as { name: string }[]).map((c) => c.name));
 if (!cols.has("source_text")) db.exec("ALTER TABLE applications ADD COLUMN source_text TEXT"); // raw page/pasted text the extraction ran on
 if (!cols.has("fit_score")) db.exec("ALTER TABLE applications ADD COLUMN fit_score INTEGER; ALTER TABLE applications ADD COLUMN fit_json TEXT; ALTER TABLE applications ADD COLUMN fit_status TEXT");
+if (!cols.has("resume_key")) db.exec("ALTER TABLE applications ADD COLUMN resume_key TEXT; ALTER TABLE applications ADD COLUMN resume_pinned INTEGER NOT NULL DEFAULT 0; ALTER TABLE applications ADD COLUMN fit_all TEXT");
 if (!cols.has("next_action_at")) db.exec("ALTER TABLE applications ADD COLUMN next_action_at TEXT; ALTER TABLE applications ADD COLUMN next_action TEXT; ALTER TABLE applications ADD COLUMN followed_up_at TEXT");
 const dcols = new Set((db.prepare("PRAGMA table_info(documents)").all() as { name: string }[]).map((c) => c.name));
 if (!dcols.has("pages")) db.exec("ALTER TABLE documents ADD COLUMN pages INTEGER; ALTER TABLE documents ADD COLUMN pdf TEXT; ALTER TABLE documents ADD COLUMN pdf_hash TEXT");
@@ -75,6 +76,7 @@ export interface Application {
   status: Status; applied_at: string | null; notes: string; folder: string | null; source_text: string | null;
   fit_score: number | null; fit_json: string | null; fit_status: "pending" | "done" | "error" | null;
   next_action_at: string | null; next_action: string | null; followed_up_at: string | null;
+  resume_key: string | null; resume_pinned: number; fit_all: string | null;
   created_at: string; updated_at: string;
 }
 
