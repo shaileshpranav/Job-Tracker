@@ -96,6 +96,10 @@ Storage folders can be moved with `DATA_DIR`, `APPLICATIONS_DIR`, `PROFILE_DIR` 
 - **Compare** (Resume / Cover letter tabs) — line diff of the current version against the base resume or any earlier version; the fastest way to spot anything the model invented or dropped.
 - **Backup & export** (home screen) — `.tar.gz` of the database, application folders, base resume, templates and secret key; CSV of all applications.
 
+## Model quality guard
+
+Every model result is sanity-checked before it's used: structured outputs for placeholder values (`O-7`, `string`, `N/A`, leaked JSON, repeated tokens), empty required fields, descriptions far shorter than the page they came from, too-short answers; long-form documents for template residue and minimum length. When a result fails, the failure is recorded against that model and the call is **retried once on a fallback** — the one you set in **Settings → Model quality guard**, or automatically the strongest model already in your routing (or Anthropic directly if a key is present). The Settings card shows a per-model reliability table; any task routed to a model that has returned junk in ≥30% of calls gets an ⚠ badge. The guard can be switched off.
+
 ## Tasks queue
 
 Every model-backed action — capture, re-extract, fit score, resume/cover letter, condense, answers, resume import — is queued as a **task** and runs in the background, one at a time (set `JOB_CONCURRENCY=2` in `.env` to allow more if you're on hosted models). Buttons return instantly; the ⏱ button shows how many tasks are active and opens the Tasks panel with live progress, history, **Cancel** (queued tasks stop immediately; running ones stop at their next step) and **Retry**. The tab you're on shows an inline "working…" banner for its own tasks, and the app refreshes itself when a task finishes. Tasks are stored in SQLite, so a queue survives a restart (anything mid-flight when the server stopped is marked failed for retry).
@@ -136,6 +140,7 @@ src/
   documents.ts  per-application files: job.md, questions.md, LaTeX/PDF builds
   goals.ts      targets, streaks, XP, achievements
   ats.ts        deterministic ATS keyword check
+  guard.ts      output sanity checks, per-model reliability, fallback retry
   feed.ts       job feed sources, filters, store
   crypto.ts     at-rest encryption for saved keys, password hashing
   queue.ts      persistent task queue + worker

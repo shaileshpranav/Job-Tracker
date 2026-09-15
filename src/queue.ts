@@ -5,6 +5,7 @@
  * are marked failed on boot so they can be retried.
  */
 import { db } from "./db.ts";
+import { withProgress } from "./guard.ts";
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS jobs (
@@ -139,7 +140,7 @@ async function runJob(job: Job) {
     db.prepare("UPDATE jobs SET progress = ? WHERE id = ?").run(msg, job.id);
   };
   try {
-    const result = await handlers.get(job.type)!(JSON.parse(job.payload), job, progress);
+    const result = await withProgress(progress, () => handlers.get(job.type)!(JSON.parse(job.payload), job, progress));
     db.prepare("UPDATE jobs SET status = 'done', progress = NULL, result = ?, finished_at = datetime('now') WHERE id = ?").run(JSON.stringify(result ?? null), job.id);
   } catch (e: any) {
     if (e instanceof NeedsYou) {

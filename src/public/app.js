@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null, guard: null };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
@@ -512,13 +512,26 @@ function renderSettings() {
       </details>`).join("") : '<p class="muted">Loading…</p>'}
     </div>` : ""}
 
+    <div class="card"><h2>Model quality guard</h2>
+      <p class="muted">Every structured result (captured job, fit score, answers…) is sanity-checked — placeholder values like <code>O-7</code>, leaked JSON, empty fields, repeated tokens. Junk is recorded against the model and the call is retried once on a stronger fallback.</p>
+      ${state.guard ? `
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;color:var(--ink)"><input type="checkbox" id="guardOn" ${state.guard.settings.enabled ? "checked" : ""} style="width:auto"> Enabled</label>
+      <div class="field"><label>Fallback model ${state.guard.settings.provider && state.guard.settings.model ? "" : `<span class="muted">— auto: ${state.guard.auto ? `<code>${esc(state.guard.auto.provider)} · ${esc(state.guard.auto.model)}</code>` : "<b>none available</b> (add an Anthropic key or route a task to a strong model)"}</span>`}</label>
+        <div class="toolbar" style="margin:0"><div class="seg">${["auto", ...s.providers].map((p) => `<button data-guard-provider="${p}" class="${(state.guard.settings.provider || "auto") === p ? "on" : ""}">${p}</button>`).join("")}</div>
+        ${state.guard.settings.provider ? comboHtml("guardModel", state.guard.settings.provider, modelsFor(state.guard.settings.provider), state.guard.settings.model || "") : ""}</div></div>
+      ${state.guard.unreliable.length ? `<div class="banner">⚠ Unreliable routing: ${state.guard.unreliable.map((u) => `<b>${esc(u.task)}</b> → ${esc(u.provider)} · ${esc(u.model)}`).join(", ")} — these models have returned junk in ≥30% of calls. Route them to something stronger below.</div>` : ""}
+      ${state.guard.stats.length ? `<table class="stats"><tr><th>Model</th><th>OK</th><th>Junk</th><th>Rate</th><th>Last problem</th></tr>${state.guard.stats.map((m) => `<tr class="${m.junkRate >= 30 && m.total >= 3 ? "bad" : ""}"><td>${esc(m.id)}</td><td>${m.ok}</td><td>${m.junk}</td><td>${m.junkRate}%</td><td class="muted">${esc(m.lastProblem || "")}</td></tr>`).join("")}</table>
+      <div class="toolbar" style="margin:8px 0 0"><button class="ghost" id="guardClear">Clear statistics</button></div>` : '<p class="muted">No calls recorded yet.</p>'}` : '<p class="muted">Loading…</p>'}
+    </div>
+
     <div class="card"><h2>Per-task models</h2>
       <p class="muted">Optional. Route individual tasks to a different provider/model — e.g. a free local model for capture, a strong hosted model for writing. Tasks left on “default” use the model above.</p>
       ${Object.entries(s.taskNames).map(([t, name]) => {
         const r = s.tasks[t];
         const prov = r?.provider ?? null;
+        const bad = state.guard?.unreliable.some((u) => u.task === (r ? t : "default"));
         return `<div class="task-row" data-task="${t}">
-          <div class="task-name">${esc(name)}${r ? `<div class="muted"><code>${esc(r.provider)} · ${esc(r.model)}</code></div>` : `<div class="muted">default (${esc(s.provider)} · ${esc(s.model)})</div>`}</div>
+          <div class="task-name">${esc(name)}${bad ? ' <span class="pill bad" title="This model has returned junk in ≥30% of calls">⚠ unreliable</span>' : ""}${r ? `<div class="muted"><code>${esc(r.provider)} · ${esc(r.model)}</code></div>` : `<div class="muted">default (${esc(s.provider)} · ${esc(s.model)})</div>`}</div>
           <div class="seg">${["default", ...s.providers].map((p) => `<button data-task-provider="${p}" class="${(p === "default" ? !r : prov === p) ? "on" : ""}">${p}</button>`).join("")}</div>
           ${r ? comboHtml(`task_${t}`, r.provider, modelsFor(r.provider), r.model) : ""}
         </div>`;
@@ -887,6 +900,17 @@ function bind() {
       if (!key) { state.err = "Give the new base a short name, e.g. platform."; render(true); return; }
       run("Creating base…", async () => { const r = await api("PUT", `/api/profile/resumes/${encodeURIComponent(key)}`, { copyFrom, label: key.replace(/[-_.]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) }); state.profile = await api("GET", "/api/profile"); const md = await api("GET", `/api/profile/resume?key=${encodeURIComponent(r.key)}`); state.baseEdit = { key: r.key, markdown: md.markdown }; });
     });
+    if (!state.guard) api("GET", "/api/guard").then((g) => { state.guard = g; if (state.sel === "settings") render(true); });
+    if (state.guard) {
+      $("#guardOn").onchange = () => run(null, async () => { const r = await api("PUT", "/api/guard", { enabled: $("#guardOn").checked }); state.guard = { ...state.guard, ...r }; });
+      document.querySelectorAll("[data-guard-provider]").forEach((b) => b.onclick = () => run(null, async () => {
+        const p = b.dataset.guardProvider;
+        const r = await api("PUT", "/api/guard", p === "auto" ? { provider: null, model: null } : { provider: p, model: state.guard.settings.provider === p ? state.guard.settings.model : "" });
+        state.guard = { ...state.guard, ...r };
+      }));
+      if (state.guard.settings.provider) bindCombo("guardModel", (model) => run("Saving…", async () => { const r = await api("PUT", "/api/guard", { model }); state.guard = { ...state.guard, ...r }; }));
+      $("#guardClear") && ($("#guardClear").onclick = () => run(null, async () => { await api("DELETE", "/api/guard/stats"); state.guard = await api("GET", "/api/guard"); }));
+    }
     if (!state.prompts) api("GET", "/api/prompts").then((p) => { state.prompts = p; if (state.sel === "settings") render(); });
     if (!state.style) api("GET", "/api/style").then((t) => { state.style = t; if (state.sel === "settings") render(); });
     document.querySelectorAll("[data-style-save]").forEach((b) => b.onclick = () => { const k = b.dataset.styleSave, text = $(`[data-style="${k}"] .styleText`).value; run("Saving…", async () => { state.style = await api("PUT", `/api/style/${k}`, { text }); }); });

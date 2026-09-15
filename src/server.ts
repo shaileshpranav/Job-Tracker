@@ -9,6 +9,7 @@ import { listPrompts, savePrompt } from "./prompts.ts";
 import { enqueue, listJobs, getJob, cancelJob, retryJob, resumeJob, resumeMatching, clearFinishedJobs } from "./queue.ts";
 import { profileStatus, loadResume, saveResume, deleteResume, hasAnyResume, listResumes, DEFAULT_KEY } from "./profile.ts";
 import { atsCheck } from "./ats.ts";
+import { guardSettings, saveGuardSettings, modelStats, clearModelStats, resolveFallback, isUnreliable } from "./guard.ts";
 import { printPage } from "./markdown.ts";
 import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, authStatus, authRequired, setAuthPassword, type Provider, type Task, type StyleKind } from "./settings.ts";
 import { listModels } from "./llm.ts";
@@ -108,6 +109,19 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   // Goals & achievements
   if (m("GET", /^\/api\/goals$/)) { checkAchievements(); return send(res, 200, { ...stats(), achievements: listAchievements() }); }
   if (m("PUT", /^\/api\/goals$/)) { saveGoals(await readJson(req)); return send(res, 200, { ...stats(), achievements: listAchievements() }); }
+
+  // Model quality guard
+  if (m("GET", /^\/api\/guard$/)) {
+    const s = llmSettings();
+    const routes = { default: { provider: s.provider, model: s.model }, ...Object.fromEntries(Object.entries(s.tasks).filter(([, r]) => r)) } as Record<string, { provider: Provider; model: string }>;
+    return send(res, 200, {
+      settings: guardSettings(), stats: modelStats(),
+      auto: resolveFallback(routes.default),
+      unreliable: Object.entries(routes).filter(([, r]) => isUnreliable(r)).map(([task, r]) => ({ task, ...r })),
+    });
+  }
+  if (m("PUT", /^\/api\/guard$/)) { saveGuardSettings(await readJson(req)); return send(res, 200, { settings: guardSettings(), auto: resolveFallback({ provider: llmSettings().provider, model: llmSettings().model }) }); }
+  if (m("DELETE", /^\/api\/guard\/stats$/)) { clearModelStats(); return send(res, 200, { ok: true }); }
 
   // Prompts
   if (m("GET", /^\/api\/prompts$/)) return send(res, 200, listPrompts());

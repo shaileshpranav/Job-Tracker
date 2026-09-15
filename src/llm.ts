@@ -7,7 +7,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { PDFParse } from "pdf-parse";
-import { llmSettings, taskRoute, apiKey, type Provider, type Task } from "./settings.ts";
+import { llmSettings, taskRoute, apiKey, type Provider, type Task, type Route } from "./settings.ts";
 
 export interface LLM {
   readonly provider: Provider;
@@ -240,8 +240,9 @@ class OllamaLLM extends OpenAICompatLLM {
 
 // ------------------------------------------------------------------ factory
 
-export function getLLM(task?: Task): LLM {
-  const r = taskRoute(task);
+export function getLLM(task?: Task): LLM { return getLLMFor(taskRoute(task)); }
+
+export function getLLMFor(r: Route): LLM {
   switch (r.provider) {
     case "anthropic": return new AnthropicLLM(r.model);
     case "openrouter": return new OpenRouterLLM(r.model);
