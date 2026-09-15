@@ -1,17 +1,18 @@
 /** Prompt assembly. Editable text lives in prompts.ts; model calls go through llm.ts. */
 import { z } from "zod";
-import { getLLM } from "./llm.ts";
+import { getLLMFor } from "./llm.ts";
+import { guarded, checks } from "./guard.ts";
 import { getPrompt } from "./prompts.ts";
-import { getStyle, type StyleKind } from "./settings.ts";
+import { getStyle, taskRoute, type StyleKind } from "./settings.ts";
 
 // ---------- Profile ----------
 
 export function pdfToMarkdown(pdf: Buffer) {
-  return getLLM("import").pdfToMarkdown(pdf, getPrompt("import"));
+  return guarded("import", checks.markdown, (r) => getLLMFor(r).pdfToMarkdown(pdf, getPrompt("import")));
 }
 
 export function textToMarkdown(text: string) {
-  return getLLM("import").generate("You convert documents to Markdown.", `${getPrompt("import")}\n\n<resume>\n${text}\n</resume>`);
+  return guarded("import", checks.markdown, (r) => getLLMFor(r).generate("You convert documents to Markdown.", `${getPrompt("import")}\n\n<resume>\n${text}\n</resume>`));
 }
 
 // ---------- Job capture ----------
@@ -28,12 +29,13 @@ const JobSchema = z.object({
 export type JobExtract = z.infer<typeof JobSchema>;
 
 export function extractJob(pageText: string, url: string) {
-  return getLLM("capture").structured(getPrompt("capture"), `URL: ${url}\n\n<page>\n${pageText.slice(0, 120_000)}\n</page>`, JobSchema);
+  const text = pageText.slice(0, 120_000);
+  return guarded("capture", checks.job, (r) => getLLMFor(r).structured(getPrompt("capture"), `URL: ${url}\n\n<page>\n${text}\n</page>`, JobSchema), { sourceLength: text.length });
 }
 
 /** Fallback when local fetch fails (JS-rendered / bot-blocked pages): let the provider fetch it, if it can. */
 export async function fetchJobViaLLM(url: string): Promise<JobExtract & { source_text: string }> {
-  const text = await getLLM("capture").fetchUrlText(url);
+  const text = await getLLMFor(taskRoute("capture")).fetchUrlText(url);
   if (text === null) throw new Error("Could not read the posting (the site blocks scrapers, and the current provider has no web fetch). Use the bookmarklet or 'paste the description' instead.");
   if (text.length < 200) throw new Error("Could not fetch the posting. Use the bookmarklet or paste the job description instead.");
   return { ...(await extractJob(text, url)), source_text: text };
@@ -69,13 +71,13 @@ export function tailorResume(c: Ctx, emphasize: string[] = []) {
   const emph = emphasize.length
     ? `\n\nATS note: where it is truthful, use these exact terms from the posting (they are what a screening system will search for): ${emphasize.join(", ")}. Never claim a skill the base resume doesn't support — if a term doesn't apply, leave it out.`
     : "";
-  return getLLM("resume").generate(resumeSystem(c), `${getPrompt("resume_task")}${emph}\n\n${jobBlock(c.job)}`);
+  return guarded("resume", checks.markdown, (r) => getLLMFor(r).generate(resumeSystem(c), `${getPrompt("resume_task")}${emph}\n\n${jobBlock(c.job)}`));
 }
 
 /** Bounded shortening pass for a draft that runs past one page. */
 export function condenseResume(c: Ctx, md: string, pages?: number) {
   const why = pages ? `It currently compiles to ${pages} pages. ` : "";
-  return getLLM("resume").generate(resumeSystem(c), `${why}${getPrompt("resume_condense")}\n\n${jobBlock(c.job)}\n\n<resume>\n${md}\n</resume>`);
+  return guarded("resume", checks.markdown, (r) => getLLMFor(r).generate(resumeSystem(c), `${why}${getPrompt("resume_condense")}\n\n${jobBlock(c.job)}\n\n<resume>\n${md}\n</resume>`));
 }
 
 /** Heuristic used only when LaTeX isn't available to measure real pages. */
@@ -97,15 +99,15 @@ const FitSchema = z.object({
 export type Fit = z.infer<typeof FitSchema>;
 
 export function scoreFit(c: Ctx) {
-  return getLLM("fit").structured(`${getPrompt("fit")}\n\n${profileBlock(c)}`, jobBlock(c.job), FitSchema);
+  return guarded("fit", checks.fit, (r) => getLLMFor(r).structured(`${getPrompt("fit")}\n\n${profileBlock(c)}`, jobBlock(c.job), FitSchema));
 }
 
 export function writeCoverLetter(c: Ctx, tailoredResume: string) {
-  return getLLM("cover_letter").generate(
+  return guarded("cover_letter", checks.markdown, (r) => getLLMFor(r).generate(
     `${getPrompt("cover_system")} ${getPrompt("honesty")}${styleBlock("cover_letter")}\n\n${profileBlock(c)}`,
     `${getPrompt("cover_task")}\n\n${jobBlock(c.job)}\n\n<tailored_resume>\n${tailoredResume}\n</tailored_resume>`,
     8000,
-  );
+  ));
 }
 
 // ---------- Application questions ----------
@@ -118,11 +120,11 @@ export async function answerQuestions(c: Ctx, questions: string[], priorQA: { qu
   const prior = priorQA.length
     ? `\n\n<previous_answers>\nAnswers the candidate has given on other applications. Reuse their substance and voice where the question is similar; adapt to this company.\n${priorQA.map((q) => `Q: ${q.question}\nA: ${q.answer}`).join("\n\n")}\n</previous_answers>`
     : "";
-  const res = await getLLM("questions").structured(
+  const res = await guarded("questions", checks.answers, (r) => getLLMFor(r).structured(
     `${getPrompt("questions_system")} ${getPrompt("honesty")}\n\n${profileBlock(c)}${prior}`,
     `${jobBlock(c.job)}\n\nQuestions:\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n\nReturn one answer per question, with the question text copied exactly.`,
     AnswersSchema,
-  );
+  ));
   return res.answers;
 }
 
@@ -135,11 +137,11 @@ const StyleSchema = z.object({
 
 export async function learnStyle(kind: StyleKind, original: string, edited: string) {
   const current = getStyle(kind);
-  const res = await getLLM("learn").structured(
+  const res = await guarded("learn", checks.style, (r) => getLLMFor(r).structured(
     getPrompt("learn_style"),
     `Document type: ${kind === "resume" ? "resume" : "cover letter"}\n\n<current_rules>\n${current || "(none yet)"}\n</current_rules>\n\n<generated>\n${original}\n</generated>\n\n<edited_by_candidate>\n${edited}\n</edited_by_candidate>`,
     StyleSchema,
-  );
+  ));
   return { rules: res.rules.map((r) => r.replace(/^[-*•]\s*/, "").trim()).filter(Boolean).slice(0, 25), observed: res.changes_observed };
 }
 
@@ -149,10 +151,10 @@ export function interviewPrep(c: Ctx, fit: Fit | null) {
   const fitBlock = fit
     ? `\n\n<fit_assessment score="${fit.score}/5">\nVerdict: ${fit.verdict}\nMet: ${fit.met.join("; ") || "-"}\nPartial: ${fit.partial.join("; ") || "-"}\nMissing: ${fit.missing.join("; ") || "-"}\n</fit_assessment>`
     : "";
-  return getLLM("prep").generate(
+  return guarded("prep", checks.markdown, (r) => getLLMFor(r).generate(
     `${getPrompt("prep")} ${getPrompt("honesty")}\n\n${profileBlock(c)}`,
     `${jobBlock(c.job)}${fitBlock}\n\nWrite the prep sheet now. Output only the Markdown.`,
-  );
+  ));
 }
 
 // ---------- Feed triage ----------
@@ -164,5 +166,5 @@ const QuickFitSchema = z.object({
 
 export function quickFit(resume: string, notes: string, posting: { company: string; title: string; location: string; description: string }) {
   const body = `<posting company="${posting.company}" title="${posting.title}" location="${posting.location}">\n${posting.description.slice(0, 8000) || "(no description available — judge from the title)"}\n</posting>`;
-  return getLLM("feed").structured(`${getPrompt("feed_fit")}\n\n${profileBlock({ resume, notes, job: { company: "", role: "", description: "", requirements: [] } })}`, body, QuickFitSchema, 2000);
+  return guarded("feed", checks.quickfit, (r) => getLLMFor(r).structured(`${getPrompt("feed_fit")}\n\n${profileBlock({ resume, notes, job: { company: "", role: "", description: "", requirements: [] } })}`, body, QuickFitSchema, 2000));
 }
