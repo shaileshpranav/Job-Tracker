@@ -64,6 +64,13 @@ export const checks = {
     return p;
   }) as Check,
   style: ((r, ctx) => { const p = generic(r, ctx); if (!Array.isArray(r.rules) || !r.rules.length) p.push("no rules"); return p; }) as Check,
+  titles: ((r, ctx) => { const p = generic(r, ctx); if (!Array.isArray(r.titles) || !r.titles.length) p.push("no titles"); return p; }) as Check,
+  translation: ((r, ctx) => {
+    const p = generic(r, ctx);
+    if (!String(r.description ?? "").trim() || String(r.description).trim().length < Math.min(80, (ctx.sourceLength ?? 0) / 4)) p.push("translated description is far shorter than the original");
+    if (!String(r.role ?? "").trim()) p.push("role is empty");
+    return p;
+  }) as Check,
   /** Long-form Markdown (resume, cover letter, prep) — very light. */
   markdown: ((r: string, _ctx: { sourceLength?: number }) => {
     const p: string[] = [];

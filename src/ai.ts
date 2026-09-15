@@ -168,3 +168,33 @@ export function quickFit(resume: string, notes: string, posting: { company: stri
   const body = `<posting company="${posting.company}" title="${posting.title}" location="${posting.location}">\n${posting.description.slice(0, 8000) || "(no description available — judge from the title)"}\n</posting>`;
   return guarded("feed", checks.quickfit, (r) => getLLMFor(r).structured(`${getPrompt("feed_fit")}\n\n${profileBlock({ resume, notes, job: { company: "", role: "", description: "", requirements: [] } })}`, body, QuickFitSchema, 2000));
 }
+
+// ---------- Translation ----------
+
+const TitlesSchema = z.object({ titles: z.array(z.string()).describe("English translations, same order and count as the input") });
+/** Batch-translate job titles (cheap: one call per ~60 titles). Returns a map original → English. */
+export async function translateTitles(titles: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const uniq = [...new Set(titles.map((t) => t.trim()).filter(Boolean))];
+  for (let i = 0; i < uniq.length; i += 60) {
+    const chunk = uniq.slice(i, i + 60);
+    const r = await guarded("translate", checks.titles, (rt) => getLLMFor(rt).structured(getPrompt("translate"), `Translate these job titles into English. Return exactly ${chunk.length} titles in the same order.\n\n${chunk.map((t, k) => `${k + 1}. ${t}`).join("\n")}`, TitlesSchema, 4000));
+    chunk.forEach((t, k) => { const en = r.titles[k]?.replace(/^\d+[.)]\s*/, "").trim(); if (en) out.set(t, en); });
+  }
+  return out;
+}
+
+const JobTranslationSchema = z.object({
+  role: z.string(), location: z.string(), salary: z.string(),
+  description: z.string().describe("The full description in English Markdown, complete"),
+  requirements: z.array(z.string()),
+});
+/** Translate a captured posting's text fields into English. */
+export async function translateJob(job: { role: string; location: string | null; salary: string | null; description: string; requirements: string[] }) {
+  const src = `<role>${job.role}</role>\n<location>${job.location ?? ""}</location>\n<salary>${job.salary ?? ""}</salary>\n<requirements>\n${job.requirements.map((r) => `- ${r}`).join("\n")}\n</requirements>\n<description>\n${job.description}\n</description>`;
+  const t = await guarded("translate", checks.translation, (rt) => getLLMFor(rt).structured(getPrompt("translate"), `Translate every field of this job posting into English. Return requirements as separate array items (${job.requirements.length} expected).\n\n${src}`, JobTranslationSchema), { sourceLength: job.description.length });
+  // Small models sometimes return the list as one dash-joined string, or leave the title untouched.
+  const requirements = t.requirements.flatMap((r) => r.split(/\n|\s+-\s+|(?<=\S)\s*•\s*/).map((x) => x.replace(/^[-•*]\s*/, "").trim()).filter(Boolean));
+  const role = t.role.replace(/\s*\((?:m\/w\/d|w\/m\/d|f\/m\/d|m\/f\/d|f\/m\/x|m\/w\/x|all genders|d\/m\/w)\)\s*/gi, " ").replace(/\bKI\b/g, "AI").replace(/\s+/g, " ").trim();
+  return { ...t, role, requirements };
+}

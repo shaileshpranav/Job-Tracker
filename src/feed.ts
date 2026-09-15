@@ -33,7 +33,10 @@ db.exec(`
 `);
 const fcols = new Set((db.prepare("PRAGMA table_info(feed_items)").all() as { name: string }[]).map((c) => c.name));
 if (!fcols.has("ats_pct")) db.exec("ALTER TABLE feed_items ADD COLUMN ats_pct INTEGER; ALTER TABLE feed_items ADD COLUMN ats_missing TEXT; ALTER TABLE feed_items ADD COLUMN seen INTEGER NOT NULL DEFAULT 0; ALTER TABLE feed_items ADD COLUMN dedupe_key TEXT");
+if (!fcols.has("level")) db.exec("ALTER TABLE feed_items ADD COLUMN level TEXT; ALTER TABLE feed_items ADD COLUMN lang TEXT; ALTER TABLE feed_items ADD COLUMN title_en TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS feed_items_dedupe ON feed_items(dedupe_key)");
+// Tracked items whose application was deleted should be trackable again, not dead links.
+db.prepare("UPDATE feed_items SET status = 'new', application_id = NULL WHERE status = 'tracked' AND (application_id IS NULL OR application_id NOT IN (SELECT id FROM applications))").run();
 
 // ---------- settings ----------
 
@@ -49,6 +52,8 @@ export interface FeedSettings {
   boards: string[];          // "greenhouse:stripe", "lever:spotify", "ashby:ramp", "workable:acme", "smartrecruiters:Acme"
   aggregators: Record<Aggregator, boolean>;
   adzuna: { appId: string; appKey: string };
+  levels: Level[];           // career levels to keep (empty = all)
+  autoTranslate: boolean;    // translate non-English titles for matching (and captured postings)
   minScore: number;          // surface as "hot" at or above this
   minAts: number;            // skip model scoring when keyword coverage against every base is below this (%)
   scorePerRefresh: number;   // cap on model calls per refresh
@@ -58,8 +63,52 @@ export interface FeedSettings {
 const DEFAULTS: FeedSettings = {
   keywords: [], matchIn: "title", locations: [], exclude: ["intern", "internship", "staffing agency"], boards: [],
   aggregators: { arbeitnow: true, remoteok: true, remotive: true, hn: true, muse: false, himalayas: true, jobicy: false, adzuna: false },
-  adzuna: { appId: "", appKey: "" }, minScore: 3, minAts: 15, scorePerRefresh: 20, maxAgeDays: 30, autoHours: 0,
+  adzuna: { appId: "", appKey: "" }, levels: ["junior", "mid", "senior", "staff", "principal", "lead"], autoTranslate: true,
+  minScore: 3, minAts: 15, scorePerRefresh: 20, maxAgeDays: 30, autoHours: 0,
 };
+
+// ---------- career level (from the title, deterministic) ----------
+export const LEVELS = ["intern", "junior", "mid", "senior", "staff", "principal", "lead", "manager"] as const;
+export type Level = (typeof LEVELS)[number];
+export const LEVEL_LABELS: Record<Level, string> = { intern: "Intern", junior: "Junior / entry", mid: "Mid-level", senior: "Senior", staff: "Staff", principal: "Principal / distinguished", lead: "Lead / head of", manager: "Manager / director / VP" };
+export function classifyLevel(title: string): Level {
+  const t = ` ${title.toLowerCase().replace(/[()\[\],/|–—-]+/g, " ")} `;
+  if (/\b(intern|internship|praktikant\w*|werkstudent\w*|trainee|apprentice)\b/.test(t)) return "intern";
+  if (/\b(principal|distinguished|fellow|architect)\b/.test(t)) return "principal";
+  if (/\bstaff\b/.test(t)) return "staff";
+  if (/\b(manager|director|vp|vice president|chief|cto|ceo|coo|head)\b/.test(t) && !/\bhead\s?of\b/.test(t)) return "manager";
+  if (/\b(lead|leader|head of|tech lead|team lead)\b/.test(t)) return "lead";
+  if (/\b(senior|sr|iii|iv|expert|experienced)\b/.test(t)) return "senior";
+  if (/\b(junior|jr|entry level|entry|graduate|grad|associate|new grad|early career|i)\b/.test(t)) return "junior";
+  return "mid";
+}
+export const matchesLevel = (level: Level, levels: Level[]) => !levels.length || levels.includes(level);
+
+// ---------- language (cheap heuristic, good enough to decide whether to translate) ----------
+const LANG_HINTS: [string, RegExp][] = [
+  ["de", /\b(und|oder|nicht|mit|für|wir|sie|eine|einen|einem|das|die|der|ist|sind|werden|bei|auch|kenntnisse|erfahrung|entwickler|ingenieur|stellenangebot|bewerbung|aufgaben|anforderungen)\b/gi],
+  ["fr", /\b(et|ou|pas|avec|pour|nous|vous|une|des|les|est|sont|être|chez|aussi|compétences|expérience|développeur|ingénieur|poste|candidature|missions)\b/gi],
+  ["es", /\b(y|o|no|con|para|nosotros|una|los|las|es|son|ser|también|habilidades|experiencia|desarrollador|ingeniero|puesto|funciones|requisitos)\b/gi],
+  ["it", /\b(e|o|non|con|per|noi|una|gli|le|è|sono|essere|anche|competenze|esperienza|sviluppatore|ingegnere|posizione|candidatura|requisiti)\b/gi],
+  ["nl", /\b(en|of|niet|met|voor|wij|een|het|de|is|zijn|worden|ook|vaardigheden|ervaring|ontwikkelaar|functie|sollicitatie|werkzaamheden)\b/gi],
+  ["da", /\b(og|eller|ikke|med|til|vi|en|et|det|er|være|også|kompetencer|erfaring|udvikler|stilling|ansøgning|arbejdsopgaver|kvalifikationer)\b/gi],
+  ["sv", /\b(och|eller|inte|med|för|vi|en|ett|det|är|vara|också|kompetens|erfarenhet|utvecklare|tjänst|ansökan|arbetsuppgifter|kvalifikationer)\b/gi],
+  ["pt", /\b(e|ou|não|com|para|nós|uma|os|as|é|são|ser|também|habilidades|experiência|desenvolvedor|engenheiro|vaga|candidatura|requisitos)\b/gi],
+  ["pl", /\b(i|lub|nie|z|dla|my|jest|są|być|także|umiejętności|doświadczenie|programista|inżynier|stanowisko|aplikacja|obowiązki|wymagania)\b/gi],
+];
+const EN = /\b(the|and|with|for|you|will|our|are|is|to|of|in|experience|team|role|skills|requirements|we|engineer|developer)\b/gi;
+export function detectLang(text: string): string {
+  const t = text.slice(0, 3000);
+  if (/[\u3040-\u30ff\u3400-\u9fff]/.test(t)) return "ja";
+  if (/[\uac00-\ud7af]/.test(t)) return "ko";
+  if (/[\u0400-\u04ff]/.test(t)) return "ru";
+  if (/[\u0600-\u06ff]/.test(t)) return "ar";
+  if (/[\u0e00-\u0e7f]/.test(t)) return "th";
+  const en = (t.match(EN) ?? []).length;
+  let best = "en", bestN = en;
+  for (const [code, re] of LANG_HINTS) { const n = (t.match(re) ?? []).length; if (n > bestN * 1.15 && n >= 6) { best = code; bestN = n; } }
+  return best;
+}
 const getSetting = (k: string) => (db.prepare("SELECT value FROM settings WHERE key = ?").get(k) as { value: string } | undefined)?.value;
 const setSetting = (k: string, v: string) => db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(k, v);
 
@@ -84,6 +133,8 @@ export function saveFeedSettings(input: Partial<Record<keyof FeedSettings, unkno
     boards,
     aggregators: Object.fromEntries((Object.keys(AGGREGATORS) as Aggregator[]).map((k) => [k, agg[k] !== undefined ? Boolean(agg[k]) : cur.aggregators[k]])) as Record<Aggregator, boolean>,
     adzuna: { appId: adz.appId !== undefined ? String(adz.appId).trim() : cur.adzuna.appId, appKey: adz.appKey !== undefined ? String(adz.appKey).trim() : cur.adzuna.appKey },
+    levels: input.levels !== undefined ? (Array.isArray(input.levels) ? input.levels : list(input.levels)).map(String).filter((l): l is Level => (LEVELS as readonly string[]).includes(l)) : cur.levels,
+    autoTranslate: input.autoTranslate !== undefined ? Boolean(input.autoTranslate) : cur.autoTranslate,
     minScore: input.minScore !== undefined ? Math.max(1, Math.min(5, num(input.minScore, cur.minScore, 5))) : cur.minScore,
     minAts: input.minAts !== undefined ? num(input.minAts, cur.minAts, 100) : cur.minAts,
     scorePerRefresh: input.scorePerRefresh !== undefined ? num(input.scorePerRefresh, cur.scorePerRefresh, 200) : cur.scorePerRefresh,
@@ -101,6 +152,7 @@ export const markFeedRefreshed = () => setSetting("feed:lastRefresh", new Date()
 export interface Posting {
   source: string; external_id: string; company: string; title: string; location: string;
   remote: boolean; salary: string; url: string; description: string; posted_at: string | null;
+  level?: Level; lang?: string; title_en?: string | null;
 }
 const UA = "JobTracker/1.0 (personal job-application tracker)";
 async function getJson(url: string, init: RequestInit = {}): Promise<any> {
@@ -299,7 +351,7 @@ export function isExcluded(p: Posting, exclude: string[]) {
 // ---------- store ----------
 
 export function insertNew(postings: Posting[]): number {
-  const ins = db.prepare(`INSERT OR IGNORE INTO feed_items (source, external_id, company, title, location, remote, salary, url, description, posted_at, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const ins = db.prepare(`INSERT OR IGNORE INTO feed_items (source, external_id, company, title, location, remote, salary, url, description, posted_at, dedupe_key, level, lang, title_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const knownUrl = db.prepare("SELECT 1 FROM feed_items WHERE url = ? UNION SELECT 1 FROM applications WHERE url = ?");
   const knownKey = db.prepare("SELECT 1 FROM feed_items WHERE dedupe_key = ?");
   let n = 0;
@@ -308,7 +360,7 @@ export function insertNew(postings: Posting[]): number {
     const key = dedupeKey(p);
     if (seenKeys.has(key) || knownUrl.get(p.url, p.url) || knownKey.get(key)) continue; // same posting via another source, or already tracked
     seenKeys.add(key);
-    n += Number(ins.run(p.source, p.external_id, p.company, p.title, p.location, p.remote ? 1 : 0, p.salary, p.url, p.description, p.posted_at, key).changes);
+    n += Number(ins.run(p.source, p.external_id, p.company, p.title, p.location, p.remote ? 1 : 0, p.salary, p.url, p.description, p.posted_at, key, p.level ?? classifyLevel(p.title_en || p.title), p.lang ?? "en", p.title_en ?? null).changes);
   }
   return n;
 }
@@ -324,7 +376,7 @@ export function markSeen(ids: number[]) {
 
 export function listFeed(status: string | null = null) {
   const where = status ? "WHERE status = ?" : "WHERE status != 'dismissed'";
-  return db.prepare(`SELECT id, source, company, title, location, remote, salary, url, posted_at, fit_score, fit_reason, ats_pct, ats_missing, seen, status, application_id, created_at, length(description) AS desc_len, substr(description, 1, 700) AS excerpt FROM feed_items ${where} ORDER BY (fit_score IS NULL), fit_score DESC, ats_pct DESC, posted_at DESC, id DESC LIMIT 500`).all(...(status ? [status] : []));
+  return db.prepare(`SELECT id, source, company, title, title_en, lang, level, location, remote, salary, url, posted_at, fit_score, fit_reason, ats_pct, ats_missing, seen, status, application_id, created_at, length(description) AS desc_len, substr(description, 1, 700) AS excerpt FROM feed_items ${where} ORDER BY (fit_score IS NULL), fit_score DESC, ats_pct DESC, posted_at DESC, id DESC LIMIT 500`).all(...(status ? [status] : []));
 }
 export const getFeedItem = (id: number) => db.prepare("SELECT * FROM feed_items WHERE id = ?").get(id) as any;
 /** Unscored items worth a model call: best keyword coverage first, skipping ones below the ATS floor. */

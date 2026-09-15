@@ -17,6 +17,7 @@ export const TASKS = {
   learn: "Learn formatting from my edits",
   prep: "Interview prep",
   feed: "Feed triage (quick fit score)",
+  translate: "Translate to English",
 } as const;
 
 /** Formatting preferences learned from the user's manual edits, per document kind. */

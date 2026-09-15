@@ -106,7 +106,7 @@ async function onJobFinished(j) {
   if (j.type === "import") { state.profile = await api("GET", "/api/profile"); return; }
   if (j.type === "feed_refresh" || j.type === "feed_score") {
     const bad = Object.entries(result.report || {}).filter(([, v]) => String(v).startsWith("failed"));
-    notify(`✓ ${j.label} — ${j.type === "feed_refresh" ? `${result.added} new, ${result.screened ? `${result.screened} keyword-screened, ` : ""}` : ""}${result.scored} scored, ${result.hot} hot${result.purged ? `, ${result.purged} stale removed` : ""}${bad.length ? ` · ${bad.length} source${bad.length > 1 ? "s" : ""} failed: ${bad.map(([k, v]) => `${k} (${String(v).replace("failed: ", "")})`).join(", ")}` : ""}`);
+    notify(`✓ ${j.label} — ${j.type === "feed_refresh" ? `${result.added} new, ${result.translated ? `${result.translated} translated, ` : ""}${result.screened ? `${result.screened} keyword-screened, ` : ""}` : ""}${result.scored} scored, ${result.hot} hot${result.purged ? `, ${result.purged} stale removed` : ""}${bad.length ? ` · ${bad.length} source${bad.length > 1 ? "s" : ""} failed: ${bad.map(([k, v]) => `${k} (${String(v).replace("failed: ", "")})`).join(", ")}` : ""}`);
     if (state.sel === "feed") { await loadFeed(); } else { const f = await api("GET", "/api/feed?status=open").catch(() => null); state.feedHot = f?.counts?.unseen_hot ?? 0; }
     return;
   }
@@ -215,8 +215,8 @@ function renderFeed() {
     ${items.length ? items.map((i) => `<div class="feed-item ${i.fit_score >= st.minScore ? "hot" : ""} ${!i.seen && i.status === "new" ? "unseen" : ""}">
       <div class="feed-score">${dots(i.fit_score)}${i.fit_score != null ? `<b>${i.fit_score}</b>` : ""}</div>
       <div class="feed-main">
-        <div class="feed-title">${!i.seen && i.status === "new" ? '<span class="newdot" title="New since you last looked"></span>' : ""}<b>${esc(i.title)}</b> <span class="muted">at</span> ${esc(i.company)}</div>
-        <div class="muted feed-meta">${esc(i.location || "")}${i.remote ? " · remote" : ""}${i.salary ? ` · ${esc(i.salary)}` : ""}${i.posted_at ? ` · ${i.posted_at}` : ""} · <span class="pill">${esc(i.source)}</span> ${atsChip(i)}${i.desc_len ? "" : ' · <span title="The API gave no description; tracking will fetch the page">no text</span>'}</div>
+        <div class="feed-title">${!i.seen && i.status === "new" ? '<span class="newdot" title="New since you last looked"></span>' : ""}<b title="${i.title_en ? `Original: ${esc(i.title)}` : ""}">${esc(i.title_en || i.title)}</b>${i.title_en ? ` <span class="pill" title="Translated from ${esc((i.lang || "").toUpperCase())} — original: ${esc(i.title)}">${esc((i.lang || "").toUpperCase())} → EN</span>` : i.lang && i.lang !== "en" ? ` <span class="pill warn" title="Not translated">${esc(i.lang.toUpperCase())}</span>` : ""} <span class="muted">at</span> ${esc(i.company)}</div>
+        <div class="muted feed-meta">${i.level ? `<span class="pill">${esc(i.level)}</span> · ` : ""}${esc(i.location || "")}${i.remote ? " · remote" : ""}${i.salary ? ` · ${esc(i.salary)}` : ""}${i.posted_at ? ` · ${i.posted_at}` : ""} · <span class="pill">${esc(i.source)}</span> ${atsChip(i)}${i.desc_len ? "" : ' · <span title="The API gave no description; tracking will fetch the page">no text</span>'}</div>
         ${i.fit_reason ? `<div class="feed-reason">${esc(i.fit_reason)}</div>` : ""}
         ${i.ats_missing && i.fit_score == null ? `<div class="feed-reason">${missing(i)}</div>` : ""}
         ${i.excerpt ? `<details class="feed-more"><summary>Preview</summary><div class="muted" style="white-space:pre-wrap;margin-top:6px">${esc(i.excerpt)}${i.desc_len > 700 ? "…" : ""}</div>${i.ats_missing && i.fit_score != null ? `<div style="margin-top:6px">${missing(i)}</div>` : ""}</details>` : ""}
@@ -226,7 +226,7 @@ function renderFeed() {
           : `<button class="primary" data-feed-track="${i.id}" title="Create an application from this posting (full extraction + fit score)">＋ Track</button>`}
         <a href="${esc(i.url)}" target="_blank" rel="noopener"><button class="ghost">Posting ↗</button></a>
         ${i.fit_score == null && i.status === "new" ? `<button class="ghost" data-feed-score1="${i.id}" title="Score this one with the model">★</button>` : ""}
-        ${i.status === "dismissed" ? `<button class="ghost" data-feed-restore="${i.id}">Restore</button>` : i.status === "new" ? `<button class="ghost" data-feed-dismiss="${i.id}" title="Hide">×</button>` : ""}
+        ${i.status === "dismissed" ? `<button class="ghost" data-feed-restore="${i.id}">Restore</button><button class="ghost" data-feed-delete="${i.id}" title="Delete permanently">Delete</button>` : `<button class="ghost" data-feed-dismiss="${i.id}" title="Remove from the feed (find it again under Dismissed)">× Remove</button>`}
       </div>
     </div>`).join("") : `<div class="card muted">${state.feedFilter === "hot" ? `Nothing scored ${st.minScore}+ yet. ${c.unscored ? "Score the unscored postings, or" : "Refresh the feed, or"} lower the threshold below.` : "Nothing here."}</div>`}
     ${state.feedFilter === "dismissed" && items.length ? `<div class="toolbar"><button class="ghost" id="feedPurge">Delete all dismissed</button></div>` : ""}
@@ -241,6 +241,10 @@ function renderFeed() {
           <div class="toolbar" style="margin:6px 0 0"><input id="fDiscover" placeholder="Paste any careers page URL (or company site) to find its board…" style="flex:1"><button id="fDiscoverBtn">Find board</button></div>
           ${state.feedTest ? `<div class="muted" style="margin-top:4px">${state.feedTest.ok ? `✓ <code>${esc(state.feedTest.board)}</code> — ${state.feedTest.count} postings, e.g. ${esc(state.feedTest.sample.join(" · "))}${state.feedTest.guessed ? ` <span class="pill warn">guessed from the domain — check the titles look like this company</span>` : ""} <button data-add-board="${esc(state.feedTest.board)}" style="margin-left:6px">Add</button>` : `<span class="err">✗ ${esc(state.feedTest.error)}</span>`}</div>` : ""}</div>
       </div>
+      <div class="field"><label>Career levels to keep (classified from the title)</label><div class="toolbar" style="margin:0">
+        ${f.levels.map((l) => `<label style="display:inline-flex;align-items:center;gap:6px;margin:0"><input type="checkbox" data-level="${l.key}" ${st.levels.includes(l.key) ? "checked" : ""} style="width:auto">${esc(l.label)}</label>`).join("")}
+      </div></div>
+      <div class="field"><label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="fTranslate" ${st.autoTranslate ? "checked" : ""} style="width:auto"> Translate non-English postings to English (titles for matching; captured descriptions in full) — uses the “Translate” task model</label></div>
       <div class="field"><label>Aggregators</label><div class="toolbar" style="margin:0">
         ${Object.entries(f.aggregators).map(([k, n]) => `<label style="display:inline-flex;align-items:center;gap:6px;margin:0"><input type="checkbox" data-agg="${k}" ${st.aggregators[k] ? "checked" : ""} style="width:auto">${esc(n)}</label>`).join("")}
       </div>
@@ -359,7 +363,12 @@ function jobBadge(appId, types) {
 
 // ---------- data ----------
 async function loadList() { state.apps = await api("GET", "/api/applications"); }
-async function open(id) { state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = await api("GET", `/api/applications/${id}`); state.err = null; render(true); }
+async function open(id) {
+  let app;
+  try { app = await api("GET", `/api/applications/${id}`); }
+  catch (e) { notify(`✗ That application no longer exists (${e.message}).`); await loadList(); if (state.sel === "feed") await loadFeed(); render(true); return; }
+  state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = app; state.err = null; render(true);
+}
 
 async function refresh() { await loadList(); if (typeof state.sel === "number") state.app = await api("GET", `/api/applications/${state.sel}`); render(); }
 
@@ -663,7 +672,7 @@ function renderDetail(a) {
       <textarea id="notes" class="notes-line" placeholder="Notes…" rows="1">${esc(a.notes)}</textarea>
     </div>
     <div class="tabs">${tabs.map((t) => `<button data-tab="${t}" class="${state.tab === t ? "on" : ""}">${names[t]}${badge[t] ? `<span class="tb">${badge[t]}</span>` : ""}</button>`).join("")}</div>
-    ${jobBadge(a.id, { job: ["reextract", "fit"], resume: ["generate", "condense", "learn"], cover_letter: ["generate", "learn"], questions: ["questions"], prep: ["prep"], timeline: [] }[state.tab])}
+    ${jobBadge(a.id, { job: ["reextract", "fit"], resume: ["generate", "condense", "learn"], cover_letter: ["generate", "learn"], questions: ["questions"], prep: ["prep"], timeline: [] }[state.tab].concat(state.tab === "job" ? ["translate"] : []))}
     <div class="fade">${({ job: renderJob, resume: () => renderDoc(a, "resume"), cover_letter: () => renderDoc(a, "cover_letter"), questions: renderQuestions, prep: renderPrep, timeline: renderTimeline })[state.tab](a)}</div>`;
 }
 
@@ -704,6 +713,7 @@ function renderJob(a) {
   </div>`;
   return `${renderFit(a)}<div class="card">
     <div class="toolbar"><h3 style="margin:0">Key requirements</h3><div class="sp"></div>
+      ${a.lang && a.lang !== "en" ? `<button data-translate class="primary" title="Translate the role, description and requirements to English (the original stays as source text)">🌐 Translate from ${esc(a.lang.toUpperCase())}</button>` : ""}
       <button data-reextract="description" title="${a.has_source_text ? "Re-run extraction on the original captured page text with the current capture model" : "Re-run extraction on the saved description with the current capture model"}">↻ Re-extract</button>
       ${a.url ? `<button data-reextract="url" title="Fetch the posting again and re-extract">↻ Fetch again</button>` : ""}
       <button id="editJob">✎ Edit</button></div>
@@ -821,7 +831,7 @@ function renderPrep(a) {
   </div>`;
 }
 
-const EV_ICON = { created: "✨", status: "➜", generated: "📄", questions: "💬", questions_found: "❓", fit: "★", edited: "✎", reextracted: "↻", learned: "🎓", note: "📝", followup: "✓", call: "☎", interview: "🤝" };
+const EV_ICON = { translated: "🌐", created: "✨", status: "➜", generated: "📄", questions: "💬", questions_found: "❓", fit: "★", edited: "✎", reextracted: "↻", learned: "🎓", note: "📝", followup: "✓", call: "☎", interview: "🤝" };
 function renderTimeline(a) {
   return `<div class="card">
     <div class="toolbar"><input id="noteTxt" placeholder="Log a note — recruiter name, what they said, salary mentioned…" style="flex:1"><button id="noteAdd">Add note</button></div>
@@ -959,6 +969,7 @@ function bind() {
     document.querySelectorAll("[data-feed-score1]").forEach((b) => b.onclick = () => enqueue("/api/feed/score", { ids: [Number(b.dataset.feedScore1)] }));
     document.querySelectorAll("[data-feed-track]").forEach((b) => b.onclick = () => enqueue(`/api/feed/${b.dataset.feedTrack}/track`, {}));
     document.querySelectorAll("[data-feed-dismiss]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedDismiss}/dismiss`); await loadFeed(); }));
+    document.querySelectorAll("[data-feed-delete]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedDelete}/delete`); await loadFeed(); }));
     document.querySelectorAll("[data-feed-restore]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedRestore}/restore`); await loadFeed(); }));
     $("#feedPurge") && ($("#feedPurge").onclick = () => run(null, async () => { await api("DELETE", "/api/feed/dismissed"); await loadFeed(); }));
     $("#fDiscoverBtn") && ($("#fDiscoverBtn").onclick = () => { const input = $("#fDiscover").value; run("Looking for a job board…", async () => { state.feedTest = await api("POST", "/api/feed/discover", { input }); }); });
@@ -970,6 +981,8 @@ function bind() {
     $("#fSave") && ($("#fSave").onclick = () => {
       const body = { keywords: $("#fKeywords").value, matchIn: $("[data-matchin].on")?.dataset.matchin || "title", locations: $("#fLocations").value, exclude: $("#fExclude").value, boards: $("#fBoards").value,
         aggregators: Object.fromEntries([...document.querySelectorAll("[data-agg]")].map((c) => [c.dataset.agg, c.checked])),
+        levels: [...document.querySelectorAll("[data-level]")].filter((c) => c.checked).map((c) => c.dataset.level),
+        autoTranslate: $("#fTranslate").checked,
         adzuna: { appId: $("#fAdzId")?.value ?? undefined, appKey: $("#fAdzKey")?.value ?? undefined },
         minScore: $("#fMin").value, minAts: $("#fMinAts").value, scorePerRefresh: $("#fCap").value, maxAgeDays: $("#fAge").value, autoHours: $("#fAuto").value };
       if (body.adzuna.appId === undefined) delete body.adzuna;
@@ -1029,6 +1042,7 @@ function bind() {
   document.querySelectorAll("[data-fit]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/fit`, {}));
   document.querySelectorAll("[data-base]").forEach((b) => b.onclick = () => run("Switching base resume…", async () => { state.app = await api("PATCH", `/api/applications/${a.id}`, { resume_key: b.dataset.base }); state.ats = null; await loadList(); }));
   document.querySelectorAll("[data-reextract]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/reextract`, { source: b.dataset.reextract }));
+  $("[data-translate]") && ($("[data-translate]").onclick = () => enqueue(`/api/applications/${a.id}/translate`, {}));
   $("#eCancel") && ($("#eCancel").onclick = () => { state.editJob = false; render(); });
   $("#eSave") && ($("#eSave").onclick = () => {
     const body = {

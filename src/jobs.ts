@@ -6,8 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, type Application } from "./db.ts";
 import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
-import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, interviewPrep, quickFit, type JobExtract } from "./ai.ts";
-import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, isExcluded, isFresh, insertNew, purgeStale, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, AGGREGATORS, type Aggregator, type Posting } from "./feed.ts";
+import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, interviewPrep, quickFit, translateTitles, translateJob, type JobExtract } from "./ai.ts";
+import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, matchesLevel, classifyLevel, detectLang, isExcluded, isFresh, insertNew, purgeStale, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, AGGREGATORS, type Aggregator, type Posting } from "./feed.ts";
 import { atsCheck } from "./ats.ts";
 import { compilePdf } from "./latex.ts";
 import { registerJob, enqueue, NeedsYou } from "./queue.ts";
@@ -80,7 +80,14 @@ registerJob("capture", async (body, _job, progress) => {
     if (body.company) job.company = body.company;
     if (body.role) job.role = body.role;
   } else throw new Error("Provide a url or a description");
+  const lang = detectLang(`${job.role} ${job.description}`);
+  if (lang !== "en" && feedSettings().autoTranslate) {
+    progress(`Translating from ${lang.toUpperCase()}…`);
+    const t = await translateJob({ role: job.role, location: job.location, salary: job.salary, description: job.description, requirements: job.requirements });
+    job = { ...job, role: t.role || job.role, location: t.location || job.location, salary: t.salary || job.salary, description: t.description || job.description, requirements: t.requirements.length ? t.requirements : job.requirements };
+  }
   const app = createApplication(job, body.url?.trim() || null, sourceText);
+  if (lang !== "en") logEvent(app.id, "translated", feedSettings().autoTranslate ? `Translated from ${lang.toUpperCase()} (original kept as source text)` : `Posting is in ${lang.toUpperCase()} — use “Translate to English” on the Job tab`);
   if (body.feed_item_id) db.prepare("UPDATE feed_items SET status = 'tracked', application_id = ? WHERE id = ?").run(app.id, Number(body.feed_item_id));
   fitInBackground(app.id);
   return { application_id: app.id, company: app.company, role: app.role };
@@ -128,13 +135,26 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
   if (!sources.length) throw new Error("No sources configured — add company boards or enable an aggregator in the feed settings");
   const report: Record<string, string> = {};
   const kept: Posting[] = [];
+  let translated = 0;
   for (const [i, src] of sources.entries()) {
     progress(`Fetching ${src.name} (${i + 1}/${sources.length})…`);
     try {
       const all = await src.run();
-      const matched = all.filter((p) => p.url && p.title && matchesKeywords(p.title, s.keywords, s.matchIn === "text" ? p.description : "") && matchesLocation(p, s.locations) && !isExcluded(p, s.exclude) && isFresh(p, s.maxAgeDays));
+      // Cheap filters first (location, exclusions, age, level); keyword matching last, on English titles.
+      let pre = all.filter((p) => p.url && p.title && matchesLocation(p, s.locations) && !isExcluded(p, s.exclude) && isFresh(p, s.maxAgeDays));
+      for (const p of pre) { p.lang = detectLang(`${p.title} ${p.description.slice(0, 1500)}`); p.level = classifyLevel(p.title); }
+      pre = pre.filter((p) => matchesLevel(p.level!, s.levels));
+      const foreign = pre.filter((p) => p.lang !== "en");
+      if (foreign.length && s.autoTranslate) {
+        progress(`Translating ${foreign.length} non-English titles from ${src.name}…`);
+        try {
+          const map = await translateTitles(foreign.map((p) => p.title));
+          for (const p of foreign) { p.title_en = map.get(p.title.trim()) ?? null; if (p.title_en) { p.level = classifyLevel(p.title_en); translated++; } }
+        } catch (e: any) { report[`${src.name} (translation)`] = `failed: ${e.message}`; }
+      }
+      const matched = pre.filter((p) => matchesKeywords(p.title_en || p.title, s.keywords, s.matchIn === "text" ? p.description : ""));
       kept.push(...matched);
-      report[src.name] = `${matched.length} of ${all.length} matched`;
+      report[src.name] = `${matched.length} of ${all.length} matched${foreign.length ? ` (${foreign.length} non-English)` : ""}`;
     } catch (e: any) {
       report[src.name] = `failed: ${e.message}`;
     }
@@ -165,7 +185,7 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
       }
     }
   }
-  return { added, scored, hot, screened, purged, report };
+  return { added, scored, hot, screened, purged, translated, report };
 });
 
 registerJob("feed_score", async ({ ids }, _job, progress) => {
@@ -316,6 +336,17 @@ registerJob("prep", async (_p, job, progress) => {
   const id = saveDocument(app, "prep", md);
   logEvent(app.id, "generated", "Interview prep sheet");
   return { application_id: app.id, document_id: id };
+});
+
+registerJob("translate", async (_p, job, progress) => {
+  const app = mustApp(String(job.application_id));
+  progress("Translating to English…");
+  const t = await translateJob({ role: app.role, location: app.location, salary: app.salary, description: app.description ?? "", requirements: app.requirements ? JSON.parse(app.requirements) : [] });
+  db.prepare("UPDATE applications SET role = ?, location = ?, salary = ?, description = ?, requirements = ? WHERE id = ?").run(t.role || app.role, t.location || app.location, t.salary || app.salary, t.description || app.description, JSON.stringify(t.requirements.length ? t.requirements : app.requirements ? JSON.parse(app.requirements) : []), app.id);
+  touch(app.id);
+  writeJobFile(getApp(app.id)!);
+  logEvent(app.id, "translated", "Translated to English (original kept as source text)");
+  return { application_id: app.id };
 });
 
 registerJob("import", async ({ key = DEFAULT_KEY }, _job, progress) => {
