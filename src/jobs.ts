@@ -253,13 +253,15 @@ registerJob("fit", async (_p, job, progress) => {
   } finally { touch(appId); }
 });
 
-registerJob("generate", async ({ what = "both", emphasize = [] }, job, progress) => {
+registerJob("generate", async ({ what = "both", emphasize = [], instructions = "" }, job, progress) => {
   const app = mustApp(String(job.application_id));
   const ctx = await ctxFor(app);
   const out: Record<string, string> = {};
+  const asked = String(instructions ?? "").trim();
+  const withNote = (s: string) => asked ? `${s} — “${asked.length > 80 ? asked.slice(0, 77) + "…" : asked}”` : s;
   if (what === "resume" || what === "both") {
-    progress(emphasize.length ? `Drafting the tailored resume (working in ${emphasize.length} ATS terms)…` : "Drafting the tailored resume…");
-    let md = await tailorResume(ctx, emphasize);
+    progress(emphasize.length ? `Drafting the tailored resume (working in ${emphasize.length} ATS terms)…` : asked ? "Drafting the tailored resume with your instructions…" : "Drafting the tailored resume…");
+    let md = await tailorResume(ctx, emphasize, asked);
     let note = "Tailored resume";
     if (isLatexReady()) {
       progress("Compiling PDF to measure pages…");
@@ -276,17 +278,17 @@ registerJob("generate", async ({ what = "both", emphasize = [] }, job, progress)
       note += " (condensed)";
     }
     out.resume = md;
-    const id = saveDocument(app, "resume", md);
+    const id = saveDocument(app, "resume", md, asked);
     if (isLatexReady()) { progress("Building resume PDF…"); await buildPdf(id).catch((e) => console.error("PDF build failed:", e.message)); }
-    logEvent(app.id, "generated", note);
+    logEvent(app.id, "generated", withNote(note));
   }
   if (what === "cover_letter" || what === "both") {
-    progress("Writing the cover letter…");
+    progress(asked ? "Writing the cover letter with your instructions…" : "Writing the cover letter…");
     const latest = out.resume ?? (db.prepare("SELECT content FROM documents WHERE application_id = ? AND kind = 'resume' ORDER BY id DESC LIMIT 1").get(app.id) as any)?.content ?? ctx.resume;
-    out.cover_letter = await writeCoverLetter(ctx, latest);
-    const id = saveDocument(app, "cover_letter", out.cover_letter);
+    out.cover_letter = await writeCoverLetter(ctx, latest, asked);
+    const id = saveDocument(app, "cover_letter", out.cover_letter, asked);
     if (isLatexReady()) { progress("Building cover letter PDF…"); await buildPdf(id).catch((e) => console.error("PDF build failed:", e.message)); }
-    logEvent(app.id, "generated", "Cover letter");
+    logEvent(app.id, "generated", withNote("Cover letter"));
   }
   return { application_id: app.id, what };
 });
@@ -297,7 +299,7 @@ registerJob("condense", async ({ document_id }, job, progress) => {
   const app = mustApp(String(doc.application_id));
   progress("Condensing to one page…");
   const md = await condenseResume(await ctxFor(app), doc.content, doc.pages ?? undefined);
-  const id = saveDocument(app, "resume", md);
+  const id = saveDocument(app, "resume", md, doc.instructions); // still the same steered draft, just shorter
   if (isLatexReady()) { progress("Building PDF…"); await buildPdf(id).catch((e) => console.error("PDF build failed:", e.message)); }
   logEvent(app.id, "generated", "Condensed resume");
   return { application_id: app.id, document_id: id };

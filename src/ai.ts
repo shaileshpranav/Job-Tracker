@@ -66,12 +66,18 @@ function styleBlock(kind: StyleKind) {
 
 const resumeSystem = (c: Ctx) => `${getPrompt("resume_system")} ${getPrompt("honesty")}${styleBlock("resume")}\n\n${profileBlock(c)}`;
 
+/** Free-text steering typed by the user for one draft ("shorter", "lead with the Monta work"). Outranks the learned style rules, never the honesty rules. */
+function instructionBlock(text?: string | null) {
+  const t = text?.trim();
+  return t ? `\n\n<instructions_for_this_draft>\nThe candidate asked for the following for this draft. Follow it wherever it is truthful; it takes precedence over the general formatting preferences but never over the honesty rules.\n${t}\n</instructions_for_this_draft>` : "";
+}
+
 /** First draft. The caller decides (by real page count when LaTeX is available) whether to condense. */
-export function tailorResume(c: Ctx, emphasize: string[] = []) {
+export function tailorResume(c: Ctx, emphasize: string[] = [], instructions?: string | null) {
   const emph = emphasize.length
     ? `\n\nATS note: where it is truthful, use these exact terms from the posting (they are what a screening system will search for): ${emphasize.join(", ")}. Never claim a skill the base resume doesn't support — if a term doesn't apply, leave it out.`
     : "";
-  return guarded("resume", checks.markdown, (r) => getLLMFor(r).generate(resumeSystem(c), `${getPrompt("resume_task")}${emph}\n\n${jobBlock(c.job)}`));
+  return guarded("resume", checks.markdown, (r) => getLLMFor(r).generate(resumeSystem(c), `${getPrompt("resume_task")}${emph}${instructionBlock(instructions)}\n\n${jobBlock(c.job)}`));
 }
 
 /** Bounded shortening pass for a draft that runs past one page. */
@@ -102,10 +108,10 @@ export function scoreFit(c: Ctx) {
   return guarded("fit", checks.fit, (r) => getLLMFor(r).structured(`${getPrompt("fit")}\n\n${profileBlock(c)}`, jobBlock(c.job), FitSchema));
 }
 
-export function writeCoverLetter(c: Ctx, tailoredResume: string) {
+export function writeCoverLetter(c: Ctx, tailoredResume: string, instructions?: string | null) {
   return guarded("cover_letter", checks.markdown, (r) => getLLMFor(r).generate(
     `${getPrompt("cover_system")} ${getPrompt("honesty")}${styleBlock("cover_letter")}\n\n${profileBlock(c)}`,
-    `${getPrompt("cover_task")}\n\n${jobBlock(c.job)}\n\n<tailored_resume>\n${tailoredResume}\n</tailored_resume>`,
+    `${getPrompt("cover_task")}${instructionBlock(instructions)}\n\n${jobBlock(c.job)}\n\n<tailored_resume>\n${tailoredResume}\n</tailored_resume>`,
     8000,
   ));
 }

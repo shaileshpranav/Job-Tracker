@@ -232,6 +232,17 @@
   table.stats { border-collapse:collapse; width:100%; font-size:12.5px; } table.stats th { text-align:left; color:var(--mute); font-weight:500; padding:4px 6px; border-bottom:1px solid var(--line); }
   table.stats td { padding:5px 6px; border-bottom:1px solid var(--line-2); vertical-align:top; } table.stats tr.bad td:nth-child(4) { color:var(--bad); font-weight:600; }
   .fade { animation:fade .18s ease-out; } @keyframes fade { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:none; } }
+  /* unsaved drafts */
+  .dirty { border-color:var(--warn); } .dirty:focus { border-color:var(--warn); box-shadow:0 0 0 3px var(--warn-soft); }
+  .banner.draft { background:var(--accent-soft); display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px; }
+  /* generation instructions */
+  .doc-group.gen { flex:1 1 300px; } .gen-note { width:100%; max-width:560px; font-size:13px; padding:6px 9px; }
+  /* apply panel */
+  .apply { background:var(--panel-2); border:1px solid var(--line-2); border-radius:var(--radius-s); padding:10px 14px 12px; margin:0 0 6px; }
+  .apply-row { display:flex; gap:10px; align-items:center; padding:7px 0; border-top:1px solid var(--line-2); font-size:13px; } .apply-row .sp { flex:1; }
+  .apply-row .ic { width:22px; text-align:center; color:var(--mute); font-weight:600; flex:none; } .apply-row .ic.ok { color:var(--ok); } .apply-row .ic.bad { color:var(--bad); } .apply-row .ic.warn { color:var(--warn); }
+  .apply-done { display:flex; gap:10px 16px; flex-wrap:wrap; align-items:center; margin-top:8px; padding-top:10px; border-top:1px solid var(--line); font-size:13px; }
+  .apply-done label { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:12px; } .apply-done input[type=date] { width:auto; padding:4px 6px; font-size:13px; } .apply-done input#applyNextTxt { width:180px; padding:4px 8px; font-size:13px; }
 
   /* ---------- mobile ---------- */
   @media (max-width: 768px) {
@@ -257,6 +268,7 @@
     .doc { font-size:14px; } .ev { flex-direction:column; gap:2px; } h2 { font-size:18px; }
     .fitgrid { grid-template-columns:1fr; } .task-row { grid-template-columns:1fr; }
     .doc-group > div { flex-wrap:wrap; }
+    .apply-row { flex-wrap:wrap; } .apply-done input#applyNextTxt { width:100%; }
   }
   @media (hover: none) { .row:hover { background:inherit; } .row.sel { background:var(--accent-soft); } }
 </style>

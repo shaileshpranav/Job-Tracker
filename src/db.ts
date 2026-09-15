@@ -66,6 +66,7 @@ const dcols = new Set((db.prepare("PRAGMA table_info(documents)").all() as { nam
 if (!dcols.has("pages")) db.exec("ALTER TABLE documents ADD COLUMN pages INTEGER; ALTER TABLE documents ADD COLUMN pdf TEXT; ALTER TABLE documents ADD COLUMN pdf_hash TEXT");
 if (!dcols.has("tex")) db.exec("ALTER TABLE documents ADD COLUMN tex TEXT"); // hand-edited LaTeX, overrides the generated TeX for the PDF
 if (!dcols.has("original")) db.exec("ALTER TABLE documents ADD COLUMN original TEXT; UPDATE documents SET original = content"); // as generated, before any manual edits
+if (!dcols.has("instructions")) db.exec("ALTER TABLE documents ADD COLUMN instructions TEXT"); // what the user asked for when this version was drafted
 
 export const STATUSES = ["saved", "applied", "screening", "interview", "offer", "rejected", "withdrawn"] as const;
 export type Status = (typeof STATUSES)[number];
@@ -93,14 +94,14 @@ export function touch(appId: number) {
 }
 
 /** Write a document to the application's folder and record it. */
-export function saveDocument(app: Application, kind: string, content: string) {
+export function saveDocument(app: Application, kind: string, content: string, instructions?: string | null) {
   const dir = path.join(APPS_DIR, app.folder!);
   fs.mkdirSync(dir, { recursive: true });
   const filename = { cover_letter: "cover-letter.md", prep: "interview-prep.md" }[kind] ?? `${kind}.md`;
   const file = path.join(dir, filename);
   fs.writeFileSync(file, content);
-  const info = db.prepare("INSERT INTO documents (application_id, kind, content, original, file) VALUES (?, ?, ?, ?, ?)")
-    .run(app.id, kind, content, content, path.relative(ROOT, file));
+  const info = db.prepare("INSERT INTO documents (application_id, kind, content, original, file, instructions) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(app.id, kind, content, content, path.relative(ROOT, file), instructions?.trim() || null);
   touch(app.id);
   return Number(info.lastInsertRowid);
 }

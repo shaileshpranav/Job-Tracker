@@ -2,7 +2,55 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null, guard: null };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {} };
+
+// ---------- drafts: unsaved edits survive tab switches, background re-renders and reloads ----------
+// Any input/textarea with data-draft="key" is tracked: what you type is kept in state.drafts
+// (mirrored to localStorage) until the matching save clears it, and put back whenever that
+// field is rendered again. A field's defaultValue is its saved text, so editing back to the
+// original stops it being a draft automatically. Keys are "<what>:<appId>:…" so an
+// application's drafts can be dropped together.
+try { state.drafts = JSON.parse(localStorage.getItem("drafts") || "{}") || {}; } catch {}
+const persistDrafts = () => { try { localStorage.setItem("drafts", JSON.stringify(state.drafts)); } catch {} };
+function clearDrafts(prefix) {
+  for (const k of Object.keys(state.drafts)) if (k.startsWith(prefix)) delete state.drafts[k];
+  persistDrafts();
+}
+const hasDraft = (prefix) => Object.keys(state.drafts).some((k) => k.startsWith(prefix));
+const draftKeys = (prefix) => Object.keys(state.drafts).filter((k) => k.startsWith(prefix));
+// Drop drafts that can no longer be reached: older document versions, deleted questions.
+function pruneDrafts(a) {
+  const latest = {}; for (const d of a.documents) latest[d.kind] ??= String(d.id);
+  const qIds = new Set(a.questions.map((q) => String(q.id)));
+  for (const k of Object.keys(state.drafts)) {
+    const [what, appId, x, y] = k.split(":");
+    if (appId !== String(a.id)) continue;
+    if ((what === "doc" || what === "tex") && latest[x] !== y) delete state.drafts[k];
+    if (what === "q" && !qIds.has(x)) delete state.drafts[k];
+  }
+  persistDrafts();
+}
+// Hints (an "unsaved" pill, a Discard button, a Save button turning primary) carry the
+// key or key prefix they care about, so one pill can cover a whole form.
+function refreshDirtyHints() {
+  for (const h of document.querySelectorAll("[data-dirty-for]")) h.hidden = !hasDraft(h.dataset.dirtyFor);
+  for (const b of document.querySelectorAll("[data-dirty-primary]")) b.classList.toggle("primary", hasDraft(b.dataset.dirtyPrimary));
+}
+// Wire every data-draft field in freshly rendered HTML: restore its draft and watch it.
+function hydrateDrafts(root) {
+  for (const el of root.querySelectorAll("[data-draft]")) {
+    const key = el.dataset.draft, saved = el.defaultValue, d = state.drafts[key];
+    if (d != null && d !== saved) el.value = d;
+    else if (d != null) delete state.drafts[key];
+    el.classList.toggle("dirty", el.value !== saved);
+    el.addEventListener("input", () => {
+      if (el.value === saved) delete state.drafts[key]; else state.drafts[key] = el.value;
+      persistDrafts(); el.classList.toggle("dirty", el.value !== saved); refreshDirtyHints();
+    });
+  }
+  refreshDirtyHints();
+}
+const localDate = (offsetDays = 0) => { const d = new Date(); d.setDate(d.getDate() + offsetDays); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
@@ -87,6 +135,12 @@ async function enqueue(url, body, label) {
   render();
 }
 
+// Clipboard API first; the old execCommand path covers browsers/embeds that refuse it.
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const ta = document.createElement("textarea"); ta.value = text; ta.style.cssText = "position:fixed;opacity:0"; document.body.appendChild(ta); ta.focus(); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch {} ta.remove(); return ok;
+}
 function notify(text) { state.notice = text; render(true); clearTimeout(notify.t); notify.t = setTimeout(() => { state.notice = null; render(true); }, 3500); }
 
 async function refreshJobs() {
@@ -370,7 +424,9 @@ async function open(id) {
   let app;
   try { app = await api("GET", `/api/applications/${id}`); }
   catch (e) { notify(`✗ That application no longer exists (${e.message}).`); await loadList(); if (state.sel === "feed") await loadFeed(); render(true); return; }
-  state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = app; state.err = null; render(true);
+  state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = app; state.err = null; state.applyOpen = false;
+  pruneDrafts(app);
+  render(true);
 }
 
 async function refresh() { await loadList(); if (typeof state.sel === "number") state.app = await api("GET", `/api/applications/${state.sel}`); render(); }
@@ -397,9 +453,15 @@ function render(force = false) {
   const sig = html.length + ":" + html.slice(0, 4000) + html.slice(-4000);
   if (force || sig !== lastSig) {
     lastSig = sig;
+    // Remember the caret so a background re-render (a task finishing) doesn't kick you out of the field.
+    const ae = document.activeElement;
+    const keep = ae && main.contains(ae) && ["INPUT", "TEXTAREA"].includes(ae.tagName)
+      ? { q: ae.dataset.draft ? `[data-draft="${CSS.escape(ae.dataset.draft)}"]` : ae.id ? `#${ae.id}` : null, s: ae.selectionStart, e: ae.selectionEnd } : null;
     main.innerHTML = html;
+    hydrateDrafts(main);
     bind();
     main.scrollTop = scrollTop;
+    if (keep?.q) { const el = $(keep.q, main); if (el) { el.focus({ preventScroll: true }); try { el.setSelectionRange(keep.s, keep.e); } catch {} } }
   }
   const pill = $("#busyPill");
   pill.hidden = !state.busy;
@@ -641,13 +703,13 @@ function renderHome() {
 function renderNew() {
   return `${busy()}${errBox()}
     <div class="card"><h2>New application</h2>
-      <div class="field"><label>Job posting URL</label><input id="nUrl" placeholder="https://…" autofocus></div>
-      <details><summary class="muted">Or paste the description (for pages that block scraping)</summary>
+      <div class="field"><label>Job posting URL</label><input id="nUrl" placeholder="https://…" autofocus data-draft="new:0:url"></div>
+      <details ${hasDraft("new:0:desc") || hasDraft("new:0:company") || hasDraft("new:0:role") ? "open" : ""}><summary class="muted">Or paste the description (for pages that block scraping)</summary>
         <div class="grid2" style="margin-top:10px">
-          <div class="field"><label>Company</label><input id="nCompany"></div>
-          <div class="field"><label>Role</label><input id="nRole"></div>
+          <div class="field"><label>Company</label><input id="nCompany" data-draft="new:0:company"></div>
+          <div class="field"><label>Role</label><input id="nRole" data-draft="new:0:role"></div>
         </div>
-        <div class="field"><label>Description</label><textarea id="nDesc" style="min-height:200px"></textarea></div>
+        <div class="field"><label>Description</label><textarea id="nDesc" style="min-height:200px" data-draft="new:0:desc"></textarea></div>
       </details>
       <div class="toolbar" style="margin-top:12px"><button class="primary" id="captureBtn">Capture</button><button class="ghost" id="cancelNew">Cancel</button><span class="muted">Runs in the background — you'll be taken to the application when it's ready.</span></div>
     </div>`;
@@ -657,7 +719,13 @@ function renderDetail(a) {
   const tabs = ["job", "resume", "cover_letter", "questions", "prep", "timeline"];
   const names = { job: "Job", resume: "Resume", cover_letter: "Cover letter", questions: "Questions", prep: "Prep", timeline: "Timeline" };
   const nDoc = (k) => a.documents.filter((d) => d.kind === k).length;
-  const badge = { job: a.fit_score ? `★${a.fit_score}` : "", resume: nDoc("resume") ? `v${nDoc("resume")}` : "", cover_letter: nDoc("cover_letter") ? `v${nDoc("cover_letter")}` : "", questions: a.questions.length || "", prep: nDoc("prep") ? "✓" : "", timeline: a.events.length || "" };
+  const pen = (on) => on ? " ✎" : "";
+  const badge = {
+    job: (a.fit_score ? `★${a.fit_score}` : "") + pen(hasDraft(`job:${a.id}:`)),
+    resume: (nDoc("resume") ? `v${nDoc("resume")}` : "") + pen(hasDraft(`doc:${a.id}:resume:`) || hasDraft(`tex:${a.id}:resume:`)),
+    cover_letter: (nDoc("cover_letter") ? `v${nDoc("cover_letter")}` : "") + pen(hasDraft(`doc:${a.id}:cover_letter:`) || hasDraft(`tex:${a.id}:cover_letter:`)),
+    questions: (a.questions.length || "") + pen(hasDraft(`q:${a.id}:`)), prep: nDoc("prep") ? "✓" : "", timeline: a.events.length || "",
+  };
   return `${errBox()}
     <div class="card fade">
       <div class="toolbar" style="margin:0">
@@ -665,18 +733,51 @@ function renderDetail(a) {
         <div class="sp"></div>
         <button id="delBtn" class="ghost icon" title="Delete application">🗑</button>
       </div>
-      <div class="seg status-seg">${STATUSES.map((s) => `<button data-status="${s}" class="${s === a.status ? "on " + s : ""}">${s}</button>`).join("")}</div>
+      <div class="toolbar" style="margin:8px 0 12px;gap:6px 12px">
+        <div class="seg status-seg" style="margin:0">${STATUSES.map((s) => `<button data-status="${s}" class="${s === a.status ? "on " + s : ""}">${s}</button>`).join("")}</div>
+        <div class="sp"></div>
+        <button id="applyBtn" class="${state.applyOpen ? "on" : a.status === "saved" ? "primary" : "ghost"}" title="Everything you need to submit this application in one place: PDFs, answers, the files folder, and marking it applied">${a.status === "saved" ? "🚀 Apply" : "📦 Apply pack"}</button>
+      </div>
+      ${state.applyOpen ? renderApply(a) : ""}
       <div class="head-meta">
         <label>Applied <input type="date" id="applied" value="${a.applied_at || ""}"></label>
         <label>Next action <input type="date" id="nextAt" value="${a.next_action_at || ""}"><input id="nextTxt" placeholder="what, e.g. chase recruiter" value="${esc(a.next_action || "")}"></label>
         <span><button data-log="followup" title="Logs a follow-up today and clears the next action">✓ Followed up</button> <button data-log="call" class="ghost">☎ Call</button> <button data-log="interview" class="ghost">🤝 Interview</button></span>
         ${a.followed_up_at ? `<span class="muted">last follow-up ${a.followed_up_at}</span>` : ""}
       </div>
-      <textarea id="notes" class="notes-line" placeholder="Notes…" rows="1">${esc(a.notes)}</textarea>
+      <textarea id="notes" class="notes-line" placeholder="Notes…" rows="1" data-draft="notes:${a.id}:x">${esc(a.notes)}</textarea>
     </div>
     <div class="tabs">${tabs.map((t) => `<button data-tab="${t}" class="${state.tab === t ? "on" : ""}">${names[t]}${badge[t] ? `<span class="tb">${badge[t]}</span>` : ""}</button>`).join("")}</div>
     ${jobBadge(a.id, { job: ["reextract", "fit"], resume: ["generate", "condense", "learn"], cover_letter: ["generate", "learn"], questions: ["questions"], prep: ["prep"], timeline: [] }[state.tab].concat(state.tab === "job" ? ["translate"] : []))}
     <div class="fade">${({ job: renderJob, resume: () => renderDoc(a, "resume"), cover_letter: () => renderDoc(a, "cover_letter"), questions: renderQuestions, prep: renderPrep, timeline: renderTimeline })[state.tab](a)}</div>`;
+}
+
+// The apply step: current PDFs, answers to paste, the folder for uploads, then mark as applied.
+function renderApply(a) {
+  const latest = (k) => a.documents.find((d) => d.kind === k);
+  const count = (k) => a.documents.filter((d) => d.kind === k).length;
+  const days = state.goals?.goals?.followupDays || 7;
+  const docRow = (kind, label) => {
+    const doc = latest(kind);
+    if (!doc) return `<div class="apply-row"><span class="ic bad">✗</span><div class="sp"><b>${label}</b> <span class="muted">not generated yet</span></div><button data-gen="${kind}">✨ Generate</button></div>`;
+    const pages = doc.pages && doc.pdf_current ? `${doc.pages} page${doc.pages > 1 ? "s" : ""}` : "";
+    const warn = kind === "resume" && doc.pages > 1 && doc.pdf_current;
+    return `<div class="apply-row"><span class="ic ${warn ? "warn" : "ok"}">${warn ? "!" : "✓"}</span><div class="sp"><b>${label}</b> <span class="muted">v${count(kind)}${pages ? ` · ${warn ? `<span style="color:var(--warn)">${pages}</span>` : pages}` : ""}${doc.edited ? " · edited by you" : ""}${doc.instructions ? ` · “${esc(doc.instructions.slice(0, 40))}${doc.instructions.length > 40 ? "…" : ""}”` : ""}</span></div>
+      ${a.latex ? `<a href="/doc/${doc.id}.pdf" target="_blank"><button>⬇ PDF</button></a>` : `<a href="/doc/${doc.id}" target="_blank"><button>Print / Save as PDF</button></a>`}</div>`;
+  };
+  const n = a.questions.length;
+  return `<div class="apply fade" id="applyPanel">
+    <div class="toolbar" style="margin:0 0 4px"><h3 style="margin:0">Apply to ${esc(a.company)}</h3><span class="muted">${a.status === "saved" ? "Get the pieces, submit on their site, then mark it applied." : `Marked applied${a.applied_at ? ` on ${a.applied_at}` : ""}.`}</span><div class="sp"></div><button class="ghost icon" id="applyClose" title="Close">×</button></div>
+    ${docRow("resume", "Resume")}
+    ${docRow("cover_letter", "Cover letter")}
+    <div class="apply-row"><span class="ic ${n ? "ok" : ""}">${n ? "✓" : "–"}</span><div class="sp"><b>Answers</b> <span class="muted">${n ? `${n} ready to paste into the form` : "none drafted yet"}</span></div>${n ? `<button id="applyCopyAns" title="Copies every question and answer as plain text">⎘ Copy all answers</button>` : `<button class="ghost" data-tab="questions">Questions tab</button>`}</div>
+    <div class="apply-row"><span class="ic">📂</span><div class="sp"><b>Files</b> <span class="muted">applications/${esc(a.folder)}/ — drag the PDFs from Finder into the upload fields</span></div><button id="applyReveal" title="Rebuilds the PDFs if needed and opens the folder in Finder">Show in Finder</button></div>
+    ${a.status === "saved" ? `<div class="apply-done">
+      <label>Applied on <input type="date" id="applyDate" value="${localDate()}"></label>
+      <label>Follow up on <input type="date" id="applyNextAt" value="${localDate(days)}"><input id="applyNextTxt" value="Follow up if no reply" placeholder="next action"></label>
+      <button class="primary" id="applyMark">✓ Mark as applied</button>
+    </div>` : ""}
+  </div>`;
 }
 
 function renderFit(a) {
@@ -701,25 +802,26 @@ function renderFit(a) {
 }
 
 function renderJob(a) {
+  const jk = `job:${a.id}:`;
   if (state.editJob) return `<div class="card">
-    <h3>Edit job details</h3>
+    <div class="toolbar" style="margin:0 0 10px"><h3 style="margin:0">Edit job details</h3><span class="pill warn" data-dirty-for="${jk}" hidden>unsaved</span></div>
     <div class="grid2">
-      <div class="field"><label>Company</label><input id="eCompany" value="${esc(a.company)}"></div>
-      <div class="field"><label>Role</label><input id="eRole" value="${esc(a.role)}"></div>
-      <div class="field"><label>Location</label><input id="eLocation" value="${esc(a.location || "")}"></div>
-      <div class="field"><label>Salary</label><input id="eSalary" value="${esc(a.salary || "")}"></div>
+      <div class="field"><label>Company</label><input id="eCompany" value="${esc(a.company)}" data-draft="${jk}company"></div>
+      <div class="field"><label>Role</label><input id="eRole" value="${esc(a.role)}" data-draft="${jk}role"></div>
+      <div class="field"><label>Location</label><input id="eLocation" value="${esc(a.location || "")}" data-draft="${jk}location"></div>
+      <div class="field"><label>Salary</label><input id="eSalary" value="${esc(a.salary || "")}" data-draft="${jk}salary"></div>
     </div>
-    <div class="field"><label>Posting URL</label><input id="eUrl" value="${esc(a.url || "")}"></div>
-    <div class="field"><label>Key requirements (one per line)</label><textarea id="eReqs" style="min-height:120px">${esc(a.requirements.join("\n"))}</textarea></div>
-    <div class="field"><label>Description (Markdown)</label><textarea id="eDesc" class="doc" style="min-height:260px">${esc(a.description || "")}</textarea></div>
-    <div class="toolbar"><button class="primary" id="eSave">Save</button><button id="eCancel">Cancel</button></div>
+    <div class="field"><label>Posting URL</label><input id="eUrl" value="${esc(a.url || "")}" data-draft="${jk}url"></div>
+    <div class="field"><label>Key requirements (one per line)</label><textarea id="eReqs" style="min-height:120px" data-draft="${jk}reqs">${esc(a.requirements.join("\n"))}</textarea></div>
+    <div class="field"><label>Description (Markdown)</label><textarea id="eDesc" class="doc" style="min-height:260px" data-draft="${jk}desc">${esc(a.description || "")}</textarea></div>
+    <div class="toolbar"><button class="primary" id="eSave">Save</button><button id="eCancel" title="Leave the editor and throw away these edits">Cancel</button><span class="muted">Switching tabs keeps unsaved edits as a draft; Cancel discards them.</span></div>
   </div>`;
-  return `${renderFit(a)}<div class="card">
+  return `${renderFit(a)}${hasDraft(jk) ? `<div class="banner draft"><span>✎ You have unsaved edits to the job details.</span><button data-edit-job>Continue editing</button><button class="ghost" data-discard="${jk}">Discard</button></div>` : ""}<div class="card">
     <div class="toolbar"><h3 style="margin:0">Key requirements</h3><div class="sp"></div>
       ${a.lang && a.lang !== "en" ? `<button data-translate class="primary" title="Translate the role, description and requirements to English (the original stays as source text)">🌐 Translate from ${esc(a.lang.toUpperCase())}</button>` : ""}
       <button data-reextract="description" title="${a.has_source_text ? "Re-run extraction on the original captured page text with the current capture model" : "Re-run extraction on the saved description with the current capture model"}">↻ Re-extract</button>
       ${a.url ? `<button data-reextract="url" title="Fetch the posting again and re-extract">↻ Fetch again</button>` : ""}
-      <button id="editJob">✎ Edit</button></div>
+      <button data-edit-job>✎ Edit</button></div>
     ${!a.requirements.length || !a.location ? `<div class="banner" style="margin:8px 0">Looks thin (${[!a.location && "no location", !a.salary && "no salary", !a.requirements.length && "no requirements"].filter(Boolean).join(", ")}). The page may have been a JavaScript shell — use the <b>Save to Job Tracker</b> bookmarklet from the home screen on the posting, or paste the description via ✎ Edit, then ↻ Re-extract.</div>` : ""}
     <div>${a.requirements.map((r) => `<span class="req">${esc(r)}</span>`).join("") || '<span class="muted">none extracted</span>'}</div>
     <h3 style="margin-top:16px">Description</h3><div class="doc" style="min-height:0">${esc(a.description)}</div>
@@ -736,14 +838,18 @@ function renderDoc(a, kind) {
   const pageInfo = doc && doc.pages && doc.pdf_current
     ? (kind === "resume" ? (doc.pages === 1 ? ' · <span style="color:var(--ok)">1 page (PDF)</span>' : ` · <span style="color:var(--warn)">${doc.pages} pages (PDF)</span>`) : ` · ${doc.pages} page${doc.pages > 1 ? "s" : ""} (PDF)`)
     : kind === "resume" ? (fit ? ' · <span style="color:var(--ok)">likely one page</span>' : ' · <span style="color:var(--warn)">may run past one page</span>') : "";
-  const sizeInfo = doc ? `<span class="muted" title="One-page budget: ≤${a.one_page.words} words, ≤${a.one_page.lines} lines">${doc.size.words} words · ${doc.size.lines} lines${pageInfo}${doc.custom_tex ? ' <span class="pill warn">custom LaTeX</span>' : ""}${doc.edited ? ' <span class="pill accent">edited by you</span>' : ""}</span>` : "";
+  const sizeInfo = doc ? `<span class="muted" title="One-page budget: ≤${a.one_page.words} words, ≤${a.one_page.lines} lines">${doc.size.words} words · ${doc.size.lines} lines${pageInfo}${doc.custom_tex ? ' <span class="pill warn">custom LaTeX</span>' : ""}${doc.edited ? ' <span class="pill accent">edited by you</span>' : ""}${doc.instructions ? ` <span class="pill" title="What you asked for when this version was drafted">✎ ${esc(doc.instructions.length > 48 ? doc.instructions.slice(0, 45) + "…" : doc.instructions)}</span>` : ""}</span>` : "";
+  // Unsaved edits live in state.drafts until saved or discarded (see hydrateDrafts).
+  const mdKey = doc ? `doc:${a.id}:${kind}:${doc.id}` : "", texKey = doc ? `tex:${a.id}:${kind}:${doc.id}` : "";
+  const parked = doc && mode !== "edit" && hasDraft(mdKey) ? `<div class="banner draft"><span>✎ You have unsaved edits to this ${label}.</span><button data-docmode="edit">Continue editing</button><button class="ghost" data-discard="${mdKey}">Discard</button></div>` : "";
+  const parkedTex = doc && mode !== "tex" && hasDraft(texKey) ? `<div class="banner draft"><span>✎ You have unsaved LaTeX edits to this ${label}.</span><button data-docmode="tex">Continue editing</button><button class="ghost" data-discard="${texKey}">Discard</button></div>` : "";
   let body = "";
   if (doc) {
-    if (mode === "edit") body = `${doc.custom_tex ? `<div class="banner">This version has hand-edited LaTeX. Saving Markdown edits regenerates the LaTeX from the Markdown (your TeX tweaks will be dropped).</div>` : ""}<textarea class="doc" id="docText">${esc(doc.content)}</textarea>`;
+    if (mode === "edit") body = `${doc.custom_tex ? `<div class="banner">This version has hand-edited LaTeX. Saving Markdown edits regenerates the LaTeX from the Markdown (your TeX tweaks will be dropped).</div>` : ""}<textarea class="doc" id="docText" data-draft="${mdKey}">${esc(doc.content)}</textarea>`;
     else if (mode === "tex") body = state.tex && state.tex.id === doc.id
       ? `<div class="muted" style="margin-bottom:6px">Full document — edit anything. To fit one page, the usual levers are near the top: <code>geometry</code> margins, <code>\\linespread</code>, <code>\\parskip</code>, the <code>itemsep</code>/<code>topsep</code> in <code>\\setlist</code>, <code>\\titlespacing</code>, and the <code>[10.5pt]</code> in <code>\\documentclass</code>. Global changes belong in Settings → PDF templates.</div>
-         <textarea class="doc" id="texText" spellcheck="false" style="min-height:480px">${esc(state.tex.tex)}</textarea>
-         <div class="toolbar" style="margin-top:8px"><button class="primary" id="texSave">Save & rebuild PDF</button>${state.tex.custom ? `<button id="texReset">Reset to generated</button>` : ""}<div class="sp"></div><span class="muted" id="texResult"></span></div>`
+         <textarea class="doc" id="texText" spellcheck="false" style="min-height:480px" data-draft="${texKey}">${esc(state.tex.tex)}</textarea>
+         <div class="toolbar" style="margin-top:8px"><button class="primary" id="texSave">Save & rebuild PDF</button>${state.tex.custom ? `<button id="texReset">Reset to generated</button>` : ""}<button class="ghost" data-discard="${texKey}" data-dirty-for="${texKey}" hidden>Discard edits</button><span class="pill warn" data-dirty-for="${texKey}" hidden>unsaved</span><div class="sp"></div><span class="muted" id="texResult"></span></div>`
       : `<p class="muted"><span class="spinner"></span>Loading LaTeX…</p>`;
     else if (mode === "diff") {
       const options = [...(kind === "resume" ? [["base", "Base resume (profile/resume.md)"]] : []), ...docs.slice(1).map((d, i) => [String(d.id), `v${docs.length - 1 - i} · ${fmtTime(d.created_at)}`])];
@@ -756,12 +862,15 @@ function renderDoc(a, kind) {
   } else body = `<p class="muted">No ${label} yet. Generation uses <code>profile/resume.md</code> + this job's description${kind === "resume" ? ", and is constrained to one page" : ""}.</p>`;
   const modes = [["preview", "Preview"], ["edit", "Edit"], ...(a.latex ? [["tex", "LaTeX"]] : []), ["diff", "Compare"]];
   const ats = kind === "resume" ? renderAts(a, doc) : "";
+  // Free-text steering for the next draft; prefilled with what produced the current version.
+  const noteKey = `${a.id}:${kind}`, note = state.genNote[noteKey] ?? doc?.instructions ?? "";
   return `<div class="card">
     <div class="doc-actions">
-      <div class="doc-group"><span>Generate</span><div>
+      <div class="doc-group gen"><span>Generate</span><div>
         <button class="${doc ? "" : "primary"}" data-gen="${kind}">✨ ${doc ? "Regenerate" : "Generate"} ${label}</button>
         ${kind === "resume" ? `<button data-gen="both" title="Resume first, then a cover letter based on it">Resume + cover letter</button>` : ""}
-      </div></div>
+      </div>
+      <input id="genNote" class="gen-note" value="${esc(note)}" placeholder="Instructions for the next draft — e.g. shorter · lead with the Monta work · mention my visa status" title="Optional. Steers the next draft (and the cover letter when generating both); kept with the version it produces. Enter to generate."></div>
       ${doc ? `<div class="doc-group"><span>Refine</span><div>
         ${kind === "resume" ? `<button data-condense="${doc.id}" class="${overflow ? "primary" : ""}" title="Ask the model to cut this version down to one page (saves as a new version)">✂ Condense</button>` : ""}
         <button data-learn="${doc.id}" ${doc.edited ? "" : "disabled"} title="${doc.edited ? "Compare your edits with the generated version and update the formatting rules for future " + label + "s (content is ignored)" : "Edit and save the Markdown first, then the app can learn your formatting preferences"}">🎓 Learn my format</button>
@@ -773,8 +882,9 @@ function renderDoc(a, kind) {
       </div></div>
       </div>` : ""}
     </div>
+    ${parked}${parkedTex}
     ${ats}
-    ${doc ? `<div class="doc-meta"><span class="v">v${docs.length}</span><span>${fmtTime(doc.created_at)}</span><span>·</span>${sizeInfo}<div class="sp" style="flex:1"></div>${mode === "edit" ? `<button id="saveDoc" class="primary" data-doc="${doc.id}">Save edits</button>` : ""}</div>` : ""}
+    ${doc ? `<div class="doc-meta"><span class="v">v${docs.length}</span><span>${fmtTime(doc.created_at)}</span><span>·</span>${sizeInfo}<div class="sp" style="flex:1"></div>${mode === "edit" ? `<span class="pill warn" data-dirty-for="${mdKey}" hidden>unsaved</span><button class="ghost" data-discard="${mdKey}" data-dirty-for="${mdKey}" hidden>Discard</button><button id="saveDoc" class="primary" data-doc="${doc.id}">Save edits</button>` : ""}</div>` : ""}
     ${body}
   </div>`;
 }
@@ -816,13 +926,13 @@ function renderQuestions(a) {
   const found = a.events.find((e) => e.kind === "questions_found");
   return `<div class="card">
     <h3>Paste application questions (one per line)</h3>
-    <textarea id="qIn" placeholder="Why do you want to work at ${esc(a.company)}?\nDescribe a project you're proud of.">${found && !a.questions.length ? esc(found.detail) : ""}</textarea>
+    <textarea id="qIn" data-draft="qin:${a.id}:x" placeholder="Why do you want to work at ${esc(a.company)}?\nDescribe a project you're proud of.">${found && !a.questions.length ? esc(found.detail) : ""}</textarea>
     <div class="toolbar" style="margin-top:8px"><button class="primary" id="answerBtn">Draft answers</button><span class="muted">Reuses your answers from other applications where they fit.</span></div>
   </div>
   ${a.questions.map((q) => `<div class="qa" data-q="${q.id}">
     <h4>${esc(q.question)}</h4>
-    <textarea class="ans">${esc(q.answer)}</textarea>
-    <div class="toolbar" style="margin:8px 0 0"><button data-copy="${q.id}">Copy</button><button data-saveq="${q.id}">Save</button><div class="sp"></div><button data-delq="${q.id}">Remove</button></div>
+    <textarea class="ans" data-draft="q:${a.id}:${q.id}">${esc(q.answer)}</textarea>
+    <div class="toolbar" style="margin:8px 0 0"><button data-copy="${q.id}">Copy</button><button data-saveq="${q.id}" data-dirty-primary="q:${a.id}:${q.id}">Save</button><span class="pill warn" data-dirty-for="q:${a.id}:${q.id}" hidden>unsaved</span><div class="sp"></div><button data-delq="${q.id}">Remove</button></div>
   </div>`).join("")}`;
 }
 
@@ -1010,18 +1120,18 @@ function bind() {
   $("#bookmarklet") && api("GET", "/api/bookmarklet").then(({ href }) => {
     const a = $("#bookmarklet"); if (!a) return;
     a.href = href; a.onclick = (e) => { e.preventDefault(); alert("Drag this link to your bookmarks bar, then click it while on a job posting."); };
-    $("#bmCopy").onclick = () => navigator.clipboard.writeText(href).then(() => { $("#bmCopy").textContent = "Copied"; setTimeout(() => ($("#bmCopy").textContent = "Copy code"), 1200); });
+    $("#bmCopy").onclick = () => copyText(href).then((ok) => { $("#bmCopy").textContent = ok ? "Copied" : "Blocked"; setTimeout(() => ($("#bmCopy").textContent = "Copy code"), 1200); });
   });
   $("#bankQ") && ($("#bankQ").oninput = debounce(async () => {
     const rows = await api("GET", `/api/qa-bank?q=${encodeURIComponent($("#bankQ").value)}`);
     $("#bank").innerHTML = rows.map((q) => `<div class="qa"><h4>${esc(q.question)}</h4><div class="muted" style="margin-bottom:6px">${esc(q.company)} · ${esc(q.role)}</div><div style="white-space:pre-wrap">${esc(q.answer)}</div></div>`).join("") || '<p class="muted">Nothing yet.</p>';
   }, 250));
 
-  $("#cancelNew") && ($("#cancelNew").onclick = () => { state.sel = null; render(); });
+  $("#cancelNew") && ($("#cancelNew").onclick = () => { clearDrafts("new:"); state.sel = null; render(true); });
   $("#captureBtn") && ($("#captureBtn").onclick = () => {
     const body = { url: $("#nUrl").value.trim(), company: $("#nCompany").value.trim(), role: $("#nRole").value.trim(), description: $("#nDesc").value.trim() };
     if (!body.url && !body.description) { state.err = "Paste a job posting URL, or open the section below and paste the description."; render(); return; }
-    enqueue("/api/applications", body).then(() => { if (!state.err) { $("#nUrl") && ($("#nUrl").value = ""); $("#nDesc") && ($("#nDesc").value = ""); } });
+    enqueue("/api/applications", body).then(() => { if (!state.err) { clearDrafts("new:"); for (const id of ["#nUrl", "#nCompany", "#nRole", "#nDesc"]) $(id) && ($(id).value = ""); render(true); } });
   });
 
   const a = state.app;
@@ -1041,12 +1151,13 @@ function bind() {
   $("#noteTxt") && ($("#noteTxt").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("#noteAdd").click(); } });
   document.querySelectorAll("[data-ev-del]").forEach((b) => b.onclick = () => run(null, async () => { state.app = await api("DELETE", `/api/events/${b.dataset.evDel}`); }));
   $("#prepBtn") && ($("#prepBtn").onclick = () => enqueue(`/api/applications/${a.id}/prep`, {}));
-  $("#editJob") && ($("#editJob").onclick = () => { state.editJob = true; render(); });
+  document.querySelectorAll("[data-edit-job]").forEach((b) => b.onclick = () => { state.editJob = true; render(); });
+  document.querySelectorAll("[data-discard]").forEach((b) => b.onclick = () => { clearDrafts(b.dataset.discard); render(true); });
   document.querySelectorAll("[data-fit]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/fit`, {}));
   document.querySelectorAll("[data-base]").forEach((b) => b.onclick = () => run("Switching base resume…", async () => { state.app = await api("PATCH", `/api/applications/${a.id}`, { resume_key: b.dataset.base }); state.ats = null; await loadList(); }));
   document.querySelectorAll("[data-reextract]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/reextract`, { source: b.dataset.reextract }));
   $("[data-translate]") && ($("[data-translate]").onclick = () => enqueue(`/api/applications/${a.id}/translate`, {}));
-  $("#eCancel") && ($("#eCancel").onclick = () => { state.editJob = false; render(); });
+  $("#eCancel") && ($("#eCancel").onclick = () => { clearDrafts(`job:${a.id}:`); state.editJob = false; render(true); });
   $("#eSave") && ($("#eSave").onclick = () => {
     const body = {
       company: $("#eCompany").value.trim(), role: $("#eRole").value.trim(), location: $("#eLocation").value.trim() || null,
@@ -1054,11 +1165,14 @@ function bind() {
       requirements: $("#eReqs").value.split("\n").map((r) => r.replace(/^\s*[-*•]\s*/, "").trim()).filter(Boolean),
     };
     if (!body.company || !body.role) { state.err = "Company and role are required."; render(); return; }
-    run("Saving…", async () => { state.app = await api("PATCH", `/api/applications/${a.id}`, body); state.editJob = false; await loadList(); });
+    run("Saving…", async () => { state.app = await api("PATCH", `/api/applications/${a.id}`, body); clearDrafts(`job:${a.id}:`); state.editJob = false; await loadList(); });
   });
-  $("#delBtn").onclick = async () => { if (confirm(`Delete ${a.company} — ${a.role}? Files on disk are kept.`)) { await api("DELETE", `/api/applications/${a.id}`); state.sel = null; state.app = null; await refresh(); } };
+  $("#delBtn").onclick = async () => { if (confirm(`Delete ${a.company} — ${a.role}? Files on disk are kept.`)) { await api("DELETE", `/api/applications/${a.id}`); for (const k of Object.keys(state.drafts)) if (k.split(":")[1] === String(a.id)) delete state.drafts[k]; persistDrafts(); state.sel = null; state.app = null; await refresh(); } };
 
-  document.querySelectorAll("[data-gen]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/generate`, { what: b.dataset.gen }));
+  const genNote = () => ($("#genNote")?.value ?? state.genNote[`${a.id}:${state.tab}`] ?? "").trim();
+  document.querySelectorAll("[data-gen]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/generate`, { what: b.dataset.gen, instructions: genNote() }));
+  $("#genNote") && ($("#genNote").oninput = (e) => { state.genNote[`${a.id}:${state.tab}`] = e.target.value; });
+  $("#genNote") && ($("#genNote").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $(".doc-group.gen [data-gen]")?.click(); } });
   document.querySelectorAll("[data-diff]").forEach((b) => b.onclick = () => { state.diffAgainst = b.dataset.diff; render(); });
   document.querySelectorAll("[data-docmode]").forEach((b) => b.onclick = () => {
     state.docMode = b.dataset.docmode; render();
@@ -1070,26 +1184,44 @@ function bind() {
   });
   $("#texSave") && ($("#texSave").onclick = () => { const tex = $("#texText").value, id = state.tex.id; run("Compiling LaTeX…", async () => {
     const r = await api("PUT", `/api/documents/${id}/tex`, { tex });
+    clearDrafts(`tex:${a.id}:${state.tab}:${id}`);
     state.tex = { id, tex, custom: true };
     state.app = await api("GET", `/api/applications/${a.id}`);
     if (!r.ok) state.err = r.error; else state.err = null;
   }); });
-  $("#texReset") && ($("#texReset").onclick = () => run("Regenerating LaTeX from Markdown…", async () => { await api("PUT", `/api/documents/${state.tex.id}/tex`, { reset: true }); state.tex = null; state.app = await api("GET", `/api/applications/${a.id}`); const doc = state.app.documents.find((d) => d.kind === state.tab); const t = await api("GET", `/api/documents/${doc.id}/tex`); state.tex = { id: doc.id, ...t }; }));
+  $("#texReset") && ($("#texReset").onclick = () => run("Regenerating LaTeX from Markdown…", async () => { await api("PUT", `/api/documents/${state.tex.id}/tex`, { reset: true }); clearDrafts(`tex:${a.id}:${state.tab}:${state.tex.id}`); state.tex = null; state.app = await api("GET", `/api/applications/${a.id}`); const doc = state.app.documents.find((d) => d.kind === state.tab); const t = await api("GET", `/api/documents/${doc.id}/tex`); state.tex = { id: doc.id, ...t }; }));
   document.querySelectorAll("[data-condense]").forEach((b) => b.onclick = () => enqueue(`/api/documents/${b.dataset.condense}/condense`, {}));
-  document.querySelectorAll("[data-emphasize]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/generate`, { what: "resume", emphasize: JSON.parse(b.dataset.emphasize) }));
+  document.querySelectorAll("[data-emphasize]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/generate`, { what: "resume", emphasize: JSON.parse(b.dataset.emphasize), instructions: genNote() }));
   $("[data-ats-base]") && ($("[data-ats-base]").onclick = () => { state.ats = null; loadAts(a, null).then(() => render(true)); });
   $("#atsBox") && ($("#atsBox").ontoggle = () => { state.atsOpen = $("#atsBox").open; });
   document.querySelectorAll("[data-learn]").forEach((b) => b.onclick = () => enqueue(`/api/documents/${b.dataset.learn}/learn`, {}));
-  $("#saveDoc") && ($("#saveDoc").onclick = () => { const id = $("#saveDoc").dataset.doc, content = $("#docText").value; run(a.latex ? "Saving and rebuilding PDF…" : "Saving…", async () => { const r = await api("PUT", `/api/documents/${id}`, { content }); state.app = await api("GET", `/api/applications/${a.id}`); state.docMode = "preview"; state.tex = null; if (r.pdfError) state.err = `Saved, but the PDF failed to build: ${r.pdfError}`; }); });
+  $("#saveDoc") && ($("#saveDoc").onclick = () => { const id = $("#saveDoc").dataset.doc, content = $("#docText").value; run(a.latex ? "Saving and rebuilding PDF…" : "Saving…", async () => { const r = await api("PUT", `/api/documents/${id}`, { content }); clearDrafts(`doc:${a.id}:${state.tab}:${id}`); state.app = await api("GET", `/api/applications/${a.id}`); state.docMode = "preview"; state.tex = null; if (r.pdfError) state.err = `Saved, but the PDF failed to build: ${r.pdfError}`; }); });
 
   $("#answerBtn") && ($("#answerBtn").onclick = () => {
     const questions = $("#qIn").value.split("\n").map((s) => s.replace(/^\s*\d+[.)]\s*/, "").trim()).filter(Boolean);
     if (!questions.length) { state.err = "Paste at least one question."; render(); return; }
+    clearDrafts(`qin:${a.id}:`);
     enqueue(`/api/applications/${a.id}/questions`, { questions });
   });
-  document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => { navigator.clipboard.writeText($(`[data-q="${b.dataset.copy}"] .ans`).value); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200); });
-  document.querySelectorAll("[data-saveq]").forEach((b) => b.onclick = () => { const answer = $(`[data-q="${b.dataset.saveq}"] .ans`).value; run("Saving…", async () => { await api("PUT", `/api/questions/${b.dataset.saveq}`, { answer }); state.app = await api("GET", `/api/applications/${a.id}`); }); });
-  document.querySelectorAll("[data-delq]").forEach((b) => b.onclick = () => run(null, async () => { await api("DELETE", `/api/questions/${b.dataset.delq}`); state.app = await api("GET", `/api/applications/${a.id}`); }));
+  document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => copyText($(`[data-q="${b.dataset.copy}"] .ans`).value).then((ok) => { b.textContent = ok ? "Copied" : "Blocked"; setTimeout(() => (b.textContent = "Copy"), 1200); }));
+  document.querySelectorAll("[data-saveq]").forEach((b) => b.onclick = () => { const answer = $(`[data-q="${b.dataset.saveq}"] .ans`).value; run("Saving…", async () => { await api("PUT", `/api/questions/${b.dataset.saveq}`, { answer }); clearDrafts(`q:${a.id}:${b.dataset.saveq}`); state.app = await api("GET", `/api/applications/${a.id}`); }); });
+  document.querySelectorAll("[data-delq]").forEach((b) => b.onclick = () => run(null, async () => { await api("DELETE", `/api/questions/${b.dataset.delq}`); clearDrafts(`q:${a.id}:${b.dataset.delq}`); state.app = await api("GET", `/api/applications/${a.id}`); }));
+
+  // Apply panel
+  $("#applyBtn") && ($("#applyBtn").onclick = () => { state.applyOpen = !state.applyOpen; render(true); });
+  $("#applyClose") && ($("#applyClose").onclick = () => { state.applyOpen = false; render(true); });
+  $("#applyCopyAns") && ($("#applyCopyAns").onclick = () => {
+    const text = a.questions.map((q) => `${q.question}\n\n${q.answer}`).join("\n\n---\n\n");
+    copyText(text).then((ok) => { if (!ok) return notify("✗ The browser blocked the clipboard — use the Copy buttons on the Questions tab"); $("#applyCopyAns").textContent = `Copied ${a.questions.length} ✓`; setTimeout(() => { const b = $("#applyCopyAns"); if (b) b.textContent = "⎘ Copy all answers"; }, 1500); });
+  });
+  $("#applyReveal") && ($("#applyReveal").onclick = () => run("Preparing the files…", async () => { const r = await api("POST", `/api/applications/${a.id}/reveal`, {}); if (!r.ok) notify(`Files are in ${r.path}`); }));
+  $("#applyMark") && ($("#applyMark").onclick = () => {
+    const body = { status: "applied", applied_at: $("#applyDate").value || localDate() };
+    const at = $("#applyNextAt").value, txt = $("#applyNextTxt").value.trim();
+    if (at) { body.next_action_at = at; body.next_action = txt || "Follow up"; }
+    state.applyOpen = false;
+    patch(body).then(() => { if (!state.notice && !state.err) notify(`✓ Applied to ${a.company}${at ? ` — follow-up on ${at}` : ""}`); });
+  });
 }
 
 // Fetch and cache the model list for a provider. `quiet` swallows errors (used
