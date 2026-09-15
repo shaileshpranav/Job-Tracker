@@ -94,6 +94,14 @@ Storage folders can be moved with `DATA_DIR`, `APPLICATIONS_DIR`, `PROFILE_DIR` 
 
 **🚀 Apply** in an application's header opens the apply pack: the current resume and cover letter PDFs with their real page counts (a ✗ and a Generate button if one is missing), **Copy all answers** (every question and answer as plain text, for ATS forms), and **Show in Finder**, which rebuilds any stale PDF, writes `questions.md`, and opens the application's folder so you can drag files into the upload fields. Below that, *Applied on* (today) and *Follow up on* (today + the Goals nudge, default 7 days) are prefilled; **✓ Mark as applied** sets the status, dates and next action in one go. After that the same button reads *📦 Apply pack* so the files stay one click away.
 
+## Capturing the same posting twice
+
+Capture checks the URL (ignoring `utm_*`, `ref`, tracking parameters, `www.` and trailing slashes) and, for pasted descriptions, company + role against what you already track. A match shows *Already tracked: Company · Role (status, captured/applied date)* with **Open it** and **Capture anyway** instead of quietly creating a second application; the bookmarklet goes through the same check. Tracking a feed item you captured by hand earlier just links the two.
+
+## Before a task is queued
+
+Every model-backed button checks its task's provider first and refuses with a plain message rather than queuing a task that would die a minute later: Ollama not reachable (with the `ollama serve` hint), the routed model not pulled (`ollama pull …`), or a hosted provider with no API key. The check names the task and the model it's routed to, so a wrong per-task route is obvious.
+
 ## Follow-ups, notes and interview prep
 
 - **Next action** — each application has a date + note in its header; when the date arrives it shows ⏰ in the list and under the **follow up** filter. Applications sitting in *applied*/*screening* with no reply for N days (Goals → "nudge me after", default 7) are flagged the same way. **✓ Followed up** logs it and clears the flag; ☎ Call / 🤝 Interview log those.
@@ -131,7 +139,8 @@ Every captured posting is scored 1–5 against `profile/resume.md` in the backgr
 - **Unsaved edits are never lost.** Switching tabs, view modes or applications while editing Markdown, LaTeX, job details or an answer keeps the edit as a draft (persisted in the browser, so it survives a reload); the tab shows ✎ and the document a "You have unsaved edits — Continue editing / Discard" banner. A field with a draft has an amber border and its Save button lights up. Drafts clear when you save or discard; **Cancel** on the job-details form discards. The same applies to a half-written New application form.
 - **✂ Condense to one page** on the Resume tab asks the model to cut the current version down (saved as a new version, so nothing is lost).
 - Generated resumes are constrained to **one page**: the draft is compiled, and if the real page count is > 1 an automatic condense pass trims it and recompiles. The Resume tab shows `N page(s) (PDF)` from the actual compile; without LaTeX it falls back to a word/line heuristic.
-- Resume and cover-letter tabs default to a rendered **Preview**; switch to **Edit** to change the Markdown, then Save.
+- Resume and cover-letter tabs default to a rendered **Preview**; **PDF** shows the compiled page inline (compiling it first if needed, with the build error shown if LaTeX fails); switch to **Edit** to change the Markdown, then Save.
+- **⎘ Copy text** (Export) copies the document as plain text — headings and emphasis markers dropped, bullets kept — for application forms that want the cover letter or resume pasted in. The Questions tab and the apply pack have **Copy all answers**.
 - **Settings → Prompts** lets you edit every instruction the app sends to the model (honesty rule, capture, import, resume, condense pass, cover letter, answers). Your resume, notes, the posting and prior answers are appended automatically; the editable part is just the instructions. "Reset to default" restores the shipped text.
 
 ## Layout

@@ -113,3 +113,18 @@ export async function captureFromUrl(url: string, verifiedText?: string): Promis
     throw new CaptureBlocked(url, blocked ?? (text ? "the page had too little text to read (it is probably rendered by JavaScript)" : e.message));
   }
 }
+
+/**
+ * One form of a posting URL for duplicate detection: no fragment, no tracking
+ * parameters, no trailing slash, host lower-cased without "www.".
+ */
+export function canonicalUrl(raw: string): string {
+  try {
+    const u = new URL(raw.trim());
+    u.hash = "";
+    u.hostname = u.hostname.toLowerCase().replace(/^www\./, "");
+    for (const k of [...u.searchParams.keys()]) if (/^(utm_|ref$|refid$|referer|source$|src$|gh_src$|lever-|trk|tracking|originalsubdomain|position$|pagenum$)/i.test(k)) u.searchParams.delete(k);
+    u.searchParams.sort();
+    return u.toString().replace(/\?$/, "").replace(/\/+$/, "");
+  } catch { return raw.trim(); }
+}
