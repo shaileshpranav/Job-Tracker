@@ -19,7 +19,7 @@ import { HttpError, readJson, send } from "./http.ts";
 import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf } from "./jobs.ts";
-import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, AGGREGATORS } from "./feed.ts";
+import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? "0.0.0.0"; // reachable from your phone on the same Wi-Fi; set HOST=127.0.0.1 to keep it local-only
@@ -41,6 +41,7 @@ function appDetail(app: Application) {
     ...rest,
     fit: fit_json ? JSON.parse(fit_json) : null,
     fit_all: fit_all ? JSON.parse(fit_all) : null,
+    lang: detectLang(`${app.role} ${app.description ?? ""}`),
     resumes: listResumes().filter((x) => x.hasMarkdown).map(({ key, label }) => ({ key, label })),
     has_source_text: Boolean(source_text?.trim()),
     requirements: app.requirements ? JSON.parse(app.requirements) : [],
@@ -261,6 +262,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const app = mustApp(r[1]);
     // Its queued work is pointless now; keep finished history rows for reference.
     db.prepare("UPDATE jobs SET status = 'cancelled', finished_at = datetime('now') WHERE application_id = ? AND status = 'queued'").run(app.id);
+    db.prepare("UPDATE feed_items SET status = 'new', application_id = NULL WHERE application_id = ?").run(app.id); // trackable again
     db.prepare("DELETE FROM applications WHERE id = ?").run(app.id);
     return send(res, 200, { ok: true, folder: app.folder }); // files on disk are left alone
   }
@@ -284,6 +286,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     db.prepare("DELETE FROM events WHERE id = ?").run(ev.id);
     return send(res, 200, appDetail(getApp(ev.application_id)!));
   }
+  if ((r = m("POST", /^\/api\/applications\/(\d+)\/translate$/))) {
+    const app = mustApp(r[1]);
+    return send(res, 202, { job: enqueue("translate", `Translate — ${app.company}`, {}, app.id) });
+  }
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/prep$/))) {
     const app = mustApp(r[1]);
     if (!hasAnyResume()) throw new HttpError(400, "Import your resume first");
@@ -294,7 +300,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if (m("GET", /^\/api\/feed$/)) {
     const status = url.searchParams.get("status");
     const items = listFeed(status && status !== "open" ? status : null) as any[];
-    const payload = { items, settings: feedSettings(), aggregators: AGGREGATORS, lastRefresh: feedLastRefresh(), counts: feedCounts() };
+    const payload = { items, settings: feedSettings(), aggregators: AGGREGATORS, levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABELS[l] })), lastRefresh: feedLastRefresh(), counts: feedCounts() };
     if (url.searchParams.get("seen") === "1") markSeen(items.filter((i) => !i.seen).map((i) => i.id)); // viewing the list clears "new"
     return send(res, 200, payload);
   }
@@ -333,14 +339,15 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     try { const jobs = await fetchBoard(b); return send(res, 200, { ok: true, count: jobs.length, sample: jobs.slice(0, 3).map((j) => j.title) }); }
     catch (e: any) { return send(res, 200, { ok: false, error: e.message }); }
   }
-  if ((r = m("POST", /^\/api\/feed\/(\d+)\/(track|dismiss|restore)$/))) {
+  if ((r = m("POST", /^\/api\/feed\/(\d+)\/(track|dismiss|restore|delete)$/))) {
     const it = getFeedItem(Number(r[1]));
     if (!it) throw new HttpError(404, "Feed item not found");
     if (r[2] === "dismiss") { db.prepare("UPDATE feed_items SET status = 'dismissed' WHERE id = ?").run(it.id); return send(res, 200, { ok: true }); }
+    if (r[2] === "delete") { db.prepare("DELETE FROM feed_items WHERE id = ?").run(it.id); return send(res, 200, { ok: true }); }
     if (r[2] === "restore") { db.prepare("UPDATE feed_items SET status = 'new' WHERE id = ?").run(it.id); return send(res, 200, { ok: true }); }
     if (it.status === "tracked" && it.application_id) return send(res, 200, { application_id: it.application_id });
     const body = it.description?.trim()
-      ? { url: it.url, company: it.company, role: it.title, title: `${it.title} — ${it.company}`, description: `${it.location ? `Location: ${it.location}\n` : ""}${it.salary ? `Salary: ${it.salary}\n` : ""}\n${it.description}`, feed_item_id: it.id }
+      ? { url: it.url, company: it.company, role: it.title_en || it.title, title: `${it.title_en || it.title} — ${it.company}`, description: `${it.location ? `Location: ${it.location}\n` : ""}${it.salary ? `Salary: ${it.salary}\n` : ""}\n${it.description}`, feed_item_id: it.id }
       : { url: it.url, feed_item_id: it.id }; // no text from the API → fetch the page
     return send(res, 202, { job: enqueue("capture", `Capture — ${it.company}`, body) });
   }

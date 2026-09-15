@@ -68,6 +68,11 @@ export const DEFAULT_PROMPTS = {
     help: "Runs on every new posting the feed pulls in — keep it short, it runs often. Your base resume and the posting are appended.",
     text: "Triage a job posting against the candidate's resume in one pass. Score 1–5 (5 = obvious shortlist, 3 = plausible, 1 = don't bother), judging hard requirements first (years, must-have skills, seniority, location/work-authorisation if stated), then domain. Give a one-sentence reason naming the decisive factor.",
   },
+  translate: {
+    label: "Translate to English",
+    help: "Used for non-English postings: feed titles (batched) and captured job descriptions.",
+    text: "Translate the given text into natural English, faithfully and completely. Translate job titles too, using the standard English term (German 'KI' = 'AI', 'Informatik' = 'computer science', 'Softwareentwickler' = 'software developer'; drop gender suffixes like (m/w/d), (f/m/x)). Keep company, product and technology names, salaries and locations exactly; keep Markdown structure and one list item per requirement; do not summarise, add, or drop anything.",
+  },
   questions_system: {
     label: "Application answers — role",
     help: "System prompt. The honesty rule, your base resume, notes and previous answers are appended.",
