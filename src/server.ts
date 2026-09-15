@@ -19,7 +19,7 @@ import { HttpError, readJson, send } from "./http.ts";
 import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf } from "./jobs.ts";
-import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds } from "./feed.ts";
+import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, AGGREGATORS } from "./feed.ts";
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? "0.0.0.0"; // reachable from your phone on the same Wi-Fi; set HOST=127.0.0.1 to keep it local-only
@@ -293,7 +293,29 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   // job feed
   if (m("GET", /^\/api\/feed$/)) {
     const status = url.searchParams.get("status");
-    return send(res, 200, { items: listFeed(status && status !== "open" ? status : null), settings: feedSettings(), lastRefresh: feedLastRefresh(), counts: feedCounts() });
+    const items = listFeed(status && status !== "open" ? status : null) as any[];
+    const payload = { items, settings: feedSettings(), aggregators: AGGREGATORS, lastRefresh: feedLastRefresh(), counts: feedCounts() };
+    if (url.searchParams.get("seen") === "1") markSeen(items.filter((i) => !i.seen).map((i) => i.id)); // viewing the list clears "new"
+    return send(res, 200, payload);
+  }
+  if (m("POST", /^\/api\/feed\/discover$/)) {
+    const { input } = await readJson(req);
+    const found = await discoverBoard(String(input ?? ""));
+    if (!found) return send(res, 200, { ok: false, error: "No Greenhouse / Lever / Ashby / Workable / SmartRecruiters board found there. Try the company's careers page URL, or the board id directly (greenhouse:<token>)." });
+    try { const jobs = await fetchBoard(found.board); return send(res, 200, { ok: true, board: found.board, via: found.via, guessed: found.via.startsWith("guessed"), count: jobs.length, sample: jobs.slice(0, 3).map((j) => j.title) }); }
+    catch (e: any) { return send(res, 200, { ok: false, board: found.board, error: `Found ${found.board} but it didn't respond: ${e.message}` }); }
+  }
+  if (m("POST", /^\/api\/feed\/bulk$/)) {
+    const { action, below } = await readJson(req);
+    const s = feedSettings();
+    if (action === "dismiss_low") { const n = Number(db.prepare("UPDATE feed_items SET status = 'dismissed' WHERE status = 'new' AND fit_score IS NOT NULL AND fit_score < ?").run(Number(below ?? s.minScore)).changes); return send(res, 200, { ok: true, n }); }
+    if (action === "dismiss_screened") { const n = Number(db.prepare("UPDATE feed_items SET status = 'dismissed' WHERE status = 'new' AND fit_score IS NULL AND ats_pct IS NOT NULL AND ats_pct < ?").run(s.minAts).changes); return send(res, 200, { ok: true, n }); }
+    if (action === "track_hot") {
+      const hot = db.prepare("SELECT * FROM feed_items WHERE status = 'new' AND fit_score >= ? ORDER BY fit_score DESC, ats_pct DESC LIMIT 20").all(s.minScore) as any[];
+      for (const it of hot) enqueue("capture", `Capture — ${it.company}`, it.description?.trim() ? { url: it.url, company: it.company, role: it.title, title: `${it.title} — ${it.company}`, description: `${it.location ? `Location: ${it.location}\n` : ""}${it.salary ? `Salary: ${it.salary}\n` : ""}\n${it.description}`, feed_item_id: it.id } : { url: it.url, feed_item_id: it.id });
+      return send(res, 200, { ok: true, n: hot.length });
+    }
+    throw new HttpError(400, "Unknown bulk action");
   }
   if (m("PUT", /^\/api\/feed\/settings$/)) { saveFeedSettings(await readJson(req)); return send(res, 200, { settings: feedSettings(), counts: feedCounts() }); }
   if (m("POST", /^\/api\/feed\/refresh$/)) return send(res, 202, { job: enqueue("feed_refresh", "Refresh job feed", {}) });

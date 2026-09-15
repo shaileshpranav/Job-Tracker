@@ -79,12 +79,14 @@ The 🎯 bar under the sidebar header shows today's progress and your streak; cl
 
 ## Job feed
 
-📡 in the sidebar. The feed pulls postings from official JSON endpoints — no HTML scraping:
+📡 in the sidebar. Sources are official JSON endpoints — no HTML scraping:
 
-- **Company boards** you list as `provider:token`: `greenhouse:stripe`, `lever:spotify`, `ashby:ramp`, `workable:<account>`, `smartrecruiters:<Company>`. The token is the slug in the company's careers URL (`boards.greenhouse.io/<token>`, `jobs.lever.co/<token>`, `jobs.ashbyhq.com/<token>`). "Test" checks a board before you save it.
-- **Aggregators**: Arbeitnow (Europe, incl. Denmark/Germany), RemoteOK, Remotive.
+- **Company boards** — paste any careers URL (or just the company's site) into **Find board** and the app resolves it to `greenhouse:<token>`, `lever:<token>`, `ashby:<token>`, `workable:<account>` or `smartrecruiters:<Company>`, checks it responds, and shows sample titles before you add it. JS-rendered careers pages are handled by trying the company's domain name as the token (flagged as a guess — check the titles).
+- **Aggregators** — Arbeitnow (Europe), RemoteOK, Remotive, **HN "Who is hiring"** (the monthly thread, one posting per comment), The Muse, Himalayas, Jobicy, and Adzuna (free key; covers Singapore, Germany, UK, US and more — countries are derived from your locations).
 
-Postings are kept when the title contains all words of any keyword line, the location matches one of yours ("remote" matches remote roles; empty list = anywhere) and nothing in the exclude list appears. New ones are triaged with a quick 1–5 fit score by the **Feed triage** task model (a local model is fine — it runs on every posting; cap the number scored per refresh in the settings). Scores at or above the threshold are **🔥 Hot**; the sidebar badge shows how many. **Track** turns a posting into a full application (extraction + full fit score) and links the two; **×** dismisses. Refresh by hand or every N hours; already-seen postings and ones you've tracked are never re-added.
+Filtering: keywords (all words of a line must appear in the title, or title + description), locations ("remote" matches remote roles), an exclude list, and a maximum posting age. Duplicates collapse across sources by URL and by normalised company + title, and anything you've already tracked is skipped.
+
+Scoring is two-stage: every new posting is **keyword-screened** against your base resume(s) for free (deterministic ATS coverage, shown as a % chip with the missing terms); only postings above the coverage floor go to the **Feed triage** model, best-covered first, up to a per-refresh cap. Score ≥ threshold → **🔥 Hot**; the nav badge counts hot postings you haven't looked at yet. Each row has a **Preview** of the description; **Track** creates a full application (extraction + fit) and links back; bulk actions **Track all hot**, **Dismiss below threshold**, **Dismiss screened-out**. Stale items are purged automatically. Refresh by hand or every N hours.
 
 Storage folders can be moved with `DATA_DIR`, `APPLICATIONS_DIR`, `PROFILE_DIR` in `.env` (handy for a second instance or a synced folder).
 

@@ -126,6 +126,9 @@
   .feed-score { width:64px; display:flex; flex-direction:column; align-items:center; gap:2px; padding-top:2px; } .feed-score b { font-size:16px; }
   .dots.small .dot { width:9px; height:9px; }
   .feed-main { flex:1; min-width:0; } .feed-title { font-size:14px; } .feed-meta { font-size:12px; margin-top:2px; } .feed-reason { margin-top:6px; font-size:13px; }
+  .feed-item.unseen { box-shadow:inset 3px 0 0 var(--accent); }
+  .newdot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent); margin-right:6px; vertical-align:middle; }
+  .feed-more { margin-top:6px; font-size:12.5px; } .feed-more summary { cursor:pointer; color:var(--mute); }
   .feed-actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; max-width:40%; }
   @media (max-width:768px) { .feed-item { flex-wrap:wrap; } .feed-actions { max-width:none; width:100%; justify-content:flex-start; } }
   /* goals */

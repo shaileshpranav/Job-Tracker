@@ -7,7 +7,8 @@ import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, type Application } from "./db.ts";
 import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
 import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, interviewPrep, quickFit, type JobExtract } from "./ai.ts";
-import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, isExcluded, insertNew, unscoredIds, getFeedItem, markFeedRefreshed, type Posting } from "./feed.ts";
+import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, isExcluded, isFresh, insertNew, purgeStale, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, AGGREGATORS, type Aggregator, type Posting } from "./feed.ts";
+import { atsCheck } from "./ats.ts";
 import { compilePdf } from "./latex.ts";
 import { registerJob, enqueue, NeedsYou } from "./queue.ts";
 import { loadResume, loadNotes, importedResumes, importResume, hasAnyResume, DEFAULT_KEY } from "./profile.ts";
@@ -107,9 +108,23 @@ async function bestQuickFit(bases: { key: string; label: string; md: string }[],
 /** Small models sometimes pad structured fields with junk; keep one clean sentence. */
 const cleanReason = (r: string) => String(r ?? "").replace(/\s+/g, " ").replace(/(\b\S+\b)(?:\s+\1\b){3,}/g, "$1").trim().slice(0, 240);
 
+/** Deterministic keyword coverage of a posting against every base resume — the best base's required-term coverage. */
+function screenItem(id: number, bases: { key: string; md: string }[]) {
+  const it = getFeedItem(id); if (!it) return;
+  const reqs = (it.description || "").split(/\n/).filter((l: string) => /^\s*[-•*]\s|\b(?:required|requirements?|must have|you have|qualifications?)\b/i.test(l)).slice(0, 40);
+  let best = { pct: 0, missing: [] as string[] };
+  for (const b of bases) {
+    const r = atsCheck(it.description || it.title, reqs, b.md);
+    const pct = r.matched.length + r.missing.length ? Math.round(((r.matched.length) / (r.matched.length + r.missing.length)) * 100) : 0;
+    if (pct >= best.pct) best = { pct, missing: r.missing.filter((t) => t.required).slice(0, 8).map((t) => t.term) };
+  }
+  db.prepare("UPDATE feed_items SET ats_pct = ?, ats_missing = ? WHERE id = ?").run(best.pct, JSON.stringify(best.missing), id);
+}
+
 registerJob("feed_refresh", async (_p, _job, progress) => {
   const s = feedSettings();
-  const sources = [...s.boards.map((b) => ({ name: b, run: () => fetchBoard(b) })), ...(["arbeitnow", "remoteok", "remotive"] as const).filter((a) => s.aggregators[a]).map((a) => ({ name: a, run: () => fetchAggregator(a, s.keywords) }))];
+  const aggOpts = { locations: s.locations, adzuna: s.adzuna };
+  const sources = [...s.boards.map((b) => ({ name: b, run: () => fetchBoard(b) })), ...(Object.keys(AGGREGATORS) as Aggregator[]).filter((a) => s.aggregators[a]).map((a) => ({ name: a, run: () => fetchAggregator(a, s.keywords, aggOpts) }))];
   if (!sources.length) throw new Error("No sources configured — add company boards or enable an aggregator in the feed settings");
   const report: Record<string, string> = {};
   const kept: Posting[] = [];
@@ -117,7 +132,7 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
     progress(`Fetching ${src.name} (${i + 1}/${sources.length})…`);
     try {
       const all = await src.run();
-      const matched = all.filter((p) => p.url && p.title && matchesKeywords(p.title, s.keywords) && matchesLocation(p, s.locations) && !isExcluded(p, s.exclude));
+      const matched = all.filter((p) => p.url && p.title && matchesKeywords(p.title, s.keywords, s.matchIn === "text" ? p.description : "") && matchesLocation(p, s.locations) && !isExcluded(p, s.exclude) && isFresh(p, s.maxAgeDays));
       kept.push(...matched);
       report[src.name] = `${matched.length} of ${all.length} matched`;
     } catch (e: any) {
@@ -125,12 +140,19 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
     }
   }
   const added = insertNew(kept);
+  const purged = purgeStale(s.maxAgeDays);
   markFeedRefreshed();
-  // Triage the newest unscored ones, up to the cap.
-  const ids = unscoredIds(s.scorePerRefresh);
-  let scored = 0, hot = 0;
-  if (ids.length && hasAnyResume()) {
-    const bases = await loadBases(), notes = loadNotes();
+  let scored = 0, hot = 0, screened = 0;
+  const bases = hasAnyResume() ? await loadBases() : [];
+  if (bases.length) {
+    // Cheap first: keyword coverage for every new item, so model calls go to the promising ones.
+    const todo = unscreenedIds();
+    for (const [i, id] of todo.entries()) { if (i % 25 === 0) progress(`Keyword-screening ${i + 1}/${todo.length}…`); screenItem(id, bases); screened++; }
+  }
+  // Triage the best unscored ones with the model, up to the cap.
+  const ids = unscoredIds(s.scorePerRefresh, s.minAts);
+  if (ids.length && bases.length) {
+    const notes = loadNotes();
     for (const [i, id] of ids.entries()) {
       progress(`Scoring ${i + 1}/${ids.length}…`);
       const it = getFeedItem(id);
@@ -143,7 +165,7 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
       }
     }
   }
-  return { added, scored, hot, report };
+  return { added, scored, hot, screened, purged, report };
 });
 
 registerJob("feed_score", async ({ ids }, _job, progress) => {
@@ -152,6 +174,7 @@ registerJob("feed_score", async ({ ids }, _job, progress) => {
   let hot = 0;
   for (const [i, id] of (ids as number[]).entries()) {
     const it = getFeedItem(id); if (!it) continue;
+    if (it.ats_pct == null) screenItem(id, bases);
     progress(`Scoring ${it.company} — ${it.title} (${i + 1}/${ids.length})…`);
     const r = await bestQuickFit(bases, notes, it);
     db.prepare("UPDATE feed_items SET fit_score = ?, fit_reason = ? WHERE id = ?").run(r.score, r.reason, id);
