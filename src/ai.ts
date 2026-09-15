@@ -151,3 +151,15 @@ export function interviewPrep(c: Ctx, fit: Fit | null) {
     `${jobBlock(c.job)}${fitBlock}\n\nWrite the prep sheet now. Output only the Markdown.`,
   );
 }
+
+// ---------- Feed triage ----------
+
+const QuickFitSchema = z.object({
+  score: z.number().int().min(1).max(5),
+  reason: z.string().describe("One sentence naming the decisive factor"),
+});
+
+export function quickFit(resume: string, notes: string, posting: { company: string; title: string; location: string; description: string }) {
+  const body = `<posting company="${posting.company}" title="${posting.title}" location="${posting.location}">\n${posting.description.slice(0, 8000) || "(no description available — judge from the title)"}\n</posting>`;
+  return getLLM("feed").structured(`${getPrompt("feed_fit")}\n\n${profileBlock({ resume, notes, job: { company: "", role: "", description: "", requirements: [] } })}`, body, QuickFitSchema, 2000);
+}

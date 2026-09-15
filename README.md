@@ -69,6 +69,17 @@ The 🎯 bar under the sidebar header shows today's progress and your streak; cl
 - **Heatmap** of the last 16 weeks.
 - **Achievements** for milestones (first application, power day, streaks of 3/7/14/30, weekly and monthly wins, 10/25/50/100 sent, five 4+-fit applications, reaching screening / interview / offer, levels 3 and 5). Unlocks are announced as they happen.
 
+## Job feed
+
+📡 in the sidebar. The feed pulls postings from official JSON endpoints — no HTML scraping:
+
+- **Company boards** you list as `provider:token`: `greenhouse:stripe`, `lever:spotify`, `ashby:ramp`, `workable:<account>`, `smartrecruiters:<Company>`. The token is the slug in the company's careers URL (`boards.greenhouse.io/<token>`, `jobs.lever.co/<token>`, `jobs.ashbyhq.com/<token>`). "Test" checks a board before you save it.
+- **Aggregators**: Arbeitnow (Europe, incl. Denmark/Germany), RemoteOK, Remotive.
+
+Postings are kept when the title contains all words of any keyword line, the location matches one of yours ("remote" matches remote roles; empty list = anywhere) and nothing in the exclude list appears. New ones are triaged with a quick 1–5 fit score by the **Feed triage** task model (a local model is fine — it runs on every posting; cap the number scored per refresh in the settings). Scores at or above the threshold are **🔥 Hot**; the sidebar badge shows how many. **Track** turns a posting into a full application (extraction + full fit score) and links the two; **×** dismisses. Refresh by hand or every N hours; already-seen postings and ones you've tracked are never re-added.
+
+Storage folders can be moved with `DATA_DIR`, `APPLICATIONS_DIR`, `PROFILE_DIR` in `.env` (handy for a second instance or a synced folder).
+
 ## Follow-ups, notes and interview prep
 
 - **Next action** — each application has a date + note in its header; when the date arrives it shows ⏰ in the list and under the **follow up** filter. Applications sitting in *applied*/*screening* with no reply for N days (Goals → "nudge me after", default 7) are flagged the same way. **✓ Followed up** logs it and clears the flag; ☎ Call / 🤝 Interview log those.

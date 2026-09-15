@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
@@ -104,6 +104,13 @@ async function onJobFinished(j) {
   if (j.status === "error") { notify(`✗ ${j.label}: ${j.error}`); return; }
   notify(`✓ ${j.label}`);
   if (j.type === "import") { state.profile = await api("GET", "/api/profile"); return; }
+  if (j.type === "feed_refresh" || j.type === "feed_score") {
+    const bad = Object.entries(result.report || {}).filter(([, v]) => String(v).startsWith("failed"));
+    notify(`✓ ${j.label} — ${j.type === "feed_refresh" ? `${result.added} new, ` : ""}${result.scored} scored, ${result.hot} hot${bad.length ? ` · ${bad.length} source${bad.length > 1 ? "s" : ""} failed: ${bad.map(([k, v]) => `${k} (${String(v).replace("failed: ", "")})`).join(", ")}` : ""}`);
+    if (state.sel === "feed") { await loadFeed(); } else { const f = await api("GET", "/api/feed?status=open").catch(() => null); state.feedHot = f?.counts?.hot ?? 0; }
+    return;
+  }
+  if (j.type === "capture" && state.sel === "feed") { await loadFeed(); return; }
   if (j.type === "learn") { state.style = null; notify(`✓ ${j.label} — ${result.rules} rule${result.rules === 1 ? "" : "s"} now guide future ${result.kind === "resume" ? "resumes" : "cover letters"} (see Settings)`); }
   if (j.type === "capture" && result.application_id && (state.sel === "new" || state.sel === null || state.sel === "tasks")) {
     state.tab = "job"; await open(result.application_id); return;
@@ -169,6 +176,71 @@ function renderNeedsYou() {
       </div>` : `<p class="muted" style="margin:8px 0 0">Tip: with the 📌 Save to Job Tracker bookmarklet on your bookmarks bar, one click on the cleared page hands it over and resumes this task.</p>`}
     </div>`;
   }).join("");
+}
+
+// ---------- job feed ----------
+async function loadFeed() {
+  const status = { hot: "open", open: "open", unscored: "open", tracked: "tracked", dismissed: "dismissed" }[state.feedFilter] || "open";
+  state.feed = await api("GET", `/api/feed?status=${status}`).catch(() => state.feed);
+}
+
+function renderFeed() {
+  const f = state.feed;
+  if (!f) return `${errBox()}<div class="card"><span class="spinner"></span>Loading feed…</div>`;
+  const st = f.settings, c = f.counts;
+  let items = f.items;
+  if (state.feedFilter === "hot") items = items.filter((i) => i.status === "new" && i.fit_score >= st.minScore);
+  if (state.feedFilter === "unscored") items = items.filter((i) => i.fit_score == null);
+  const configured = st.boards.length || Object.values(st.aggregators).some(Boolean);
+  const chips = [["hot", `🔥 Hot ${c.hot}`], ["open", `All open ${c.open}`], ["unscored", `Unscored ${c.unscored}`], ["tracked", "Tracked"], ["dismissed", "Dismissed"]];
+  const dots = (n) => n == null ? '<span class="muted" title="Not scored yet">–</span>' : `<span class="dots small">${[1,2,3,4,5].map((i) => `<span class="dot ${i <= n ? "on f" + n : ""}"></span>`).join("")}</span>`;
+  return `${errBox()}
+    <div class="card">
+      <div class="toolbar" style="margin:0">
+        <div class="head-title"><h2>📡 Job feed</h2><div class="sub">${f.lastRefresh ? `Last refreshed ${fmtTime(f.lastRefresh)}` : "Never refreshed"}${st.autoHours ? ` · auto every ${st.autoHours}h` : ""} · ${st.keywords.length ? `keywords: ${esc(st.keywords.join(", "))}` : "<b>no keywords set</b>"}</div></div>
+        <div class="sp"></div>
+        ${c.unscored ? `<button id="feedScore" title="Triage the unscored postings with the feed model">★ Score ${Math.min(c.unscored, st.scorePerRefresh)} unscored</button>` : ""}
+        <button class="primary" id="feedRefresh" ${configured ? "" : "disabled"}>↻ Refresh feed</button>
+      </div>
+    </div>
+    ${configured ? "" : `<div class="banner">Nothing configured yet — add a few keywords and either company boards or an aggregator below, then Refresh.</div>`}
+    <div class="filters" style="border:0;padding:0 0 12px">${chips.map(([k, n]) => `<button data-feed-filter="${k}" class="${state.feedFilter === k ? "on" : ""}">${n}</button>`).join("")}</div>
+    ${items.length ? items.map((i) => `<div class="feed-item ${i.fit_score >= st.minScore ? "hot" : ""}">
+      <div class="feed-score">${dots(i.fit_score)}${i.fit_score != null ? `<b>${i.fit_score}</b>` : ""}</div>
+      <div class="feed-main">
+        <div class="feed-title"><b>${esc(i.title)}</b> <span class="muted">at</span> ${esc(i.company)}</div>
+        <div class="muted feed-meta">${esc(i.location || "")}${i.remote ? " · remote" : ""}${i.salary ? ` · ${esc(i.salary)}` : ""}${i.posted_at ? ` · ${i.posted_at}` : ""} · <span class="pill">${esc(i.source)}</span>${i.desc_len ? "" : ' · <span title="The API gave no description; tracking will fetch the page">no text</span>'}</div>
+        ${i.fit_reason ? `<div class="feed-reason">${esc(i.fit_reason)}</div>` : ""}
+      </div>
+      <div class="feed-actions">
+        ${i.status === "tracked" && i.application_id ? `<button class="primary" data-open-app="${i.application_id}">Open application ↗</button>`
+          : `<button class="primary" data-feed-track="${i.id}" title="Create an application from this posting (full extraction + fit score)">＋ Track</button>`}
+        <a href="${esc(i.url)}" target="_blank" rel="noopener"><button class="ghost">Posting ↗</button></a>
+        ${i.fit_score == null && i.status === "new" ? `<button class="ghost" data-feed-score1="${i.id}" title="Score this one">★</button>` : ""}
+        ${i.status === "dismissed" ? `<button class="ghost" data-feed-restore="${i.id}">Restore</button>` : i.status === "new" ? `<button class="ghost" data-feed-dismiss="${i.id}" title="Hide">×</button>` : ""}
+      </div>
+    </div>`).join("") : `<div class="card muted">${state.feedFilter === "hot" ? `Nothing scored ${st.minScore}+ yet. ${c.unscored ? "Score the unscored postings, or" : "Refresh the feed, or"} lower the threshold below.` : "Nothing here."}</div>`}
+    ${state.feedFilter === "dismissed" && items.length ? `<div class="toolbar"><button class="ghost" id="feedPurge">Delete all dismissed</button></div>` : ""}
+
+    <div class="card"><details ${configured ? "" : "open"}><summary style="cursor:pointer;font-weight:600">Feed settings</summary>
+      <div class="grid2" style="margin-top:12px">
+        <div class="field"><label>Keywords (one per line — all words of a line must appear in the title)</label><textarea id="fKeywords" placeholder="AI engineer\nmachine learning engineer\nforward deployed">${esc(st.keywords.join("\n"))}</textarea></div>
+        <div class="field"><label>Locations to include (one per line; "remote" matches remote roles; empty = anywhere)</label><textarea id="fLocations" placeholder="Singapore\nremote\nDenmark\nCopenhagen">${esc(st.locations.join("\n"))}</textarea></div>
+        <div class="field"><label>Exclude if title/location contains</label><textarea id="fExclude" style="min-height:60px">${esc(st.exclude.join("\n"))}</textarea></div>
+        <div class="field"><label>Company boards (one per line: greenhouse:stripe · lever:spotify · ashby:ramp · workable:acme · smartrecruiters:Acme)</label><textarea id="fBoards" placeholder="greenhouse:stripe\nlever:spotify\nashby:ramp">${esc(st.boards.join("\n"))}</textarea>
+          <div class="toolbar" style="margin:6px 0 0"><input id="fTest" placeholder="Test a board: greenhouse:stripe" style="flex:1"><button id="fTestBtn">Test</button></div>
+          ${state.feedTest ? `<div class="muted" style="margin-top:4px">${state.feedTest.ok ? `✓ ${state.feedTest.count} postings — e.g. ${esc(state.feedTest.sample.join(" · "))}` : `<span class="err">✗ ${esc(state.feedTest.error)}</span>`}</div>` : ""}</div>
+      </div>
+      <div class="toolbar"><span class="muted">Aggregators:</span>
+        ${[["arbeitnow", "Arbeitnow (Europe)"], ["remoteok", "RemoteOK"], ["remotive", "Remotive"]].map(([k, n]) => `<label style="display:inline-flex;align-items:center;gap:6px;margin:0"><input type="checkbox" data-agg="${k}" ${st.aggregators[k] ? "checked" : ""} style="width:auto">${n}</label>`).join("")}
+      </div>
+      <div class="grid3">
+        <div class="field"><label>Hot at score ≥</label><input id="fMin" type="number" min="1" max="5" value="${st.minScore}"></div>
+        <div class="field"><label>Max postings scored per refresh</label><input id="fCap" type="number" min="0" max="200" value="${st.scorePerRefresh}"></div>
+        <div class="field"><label>Auto-refresh every (hours, 0 = off)</label><input id="fAuto" type="number" min="0" max="168" value="${st.autoHours}"></div>
+      </div>
+      <div class="toolbar" style="margin:0"><button class="primary" id="fSave">Save feed settings</button><span class="muted">Scoring uses the “Feed triage” task model (Settings → Per-task models) — a cheap/local model is fine here.</span></div>
+    </details></div>`;
 }
 
 // ---------- goals & achievements ----------
@@ -288,6 +360,7 @@ function render() {
   const notice = (state.notice ? `<div class="notice ${state.celebrate ? "celebrate" : ""}">${esc(state.notice)}</div>` : "") + renderNeedsYou();
   if (state.sel === "tasks") main.innerHTML = back + notice + renderTasks();
   else if (state.sel === "goals") main.innerHTML = back + notice + renderGoals();
+  else if (state.sel === "feed") main.innerHTML = back + notice + renderFeed();
   else if (state.sel === "new") main.innerHTML = back + notice + renderNew();
   else if (state.sel === "settings") main.innerHTML = back + notice + renderSettings();
   else if (state.app) main.innerHTML = back + notice + renderDetail(state.app);
@@ -316,6 +389,9 @@ function renderSidebar() {
   $("#llmFootText").textContent = s ? `${s.provider} · ${s.model}` : "";
   $("#logoutBtn").hidden = !s?.auth?.enabled;
   $("#goalWidget").innerHTML = goalWidget();
+  const hot = state.feed?.counts?.hot ?? state.feedHot ?? 0;
+  $("#feedBtn").innerHTML = hot ? `📡 <b>${hot}</b>` : "📡";
+  $("#feedBtn").classList.toggle("active", hot > 0);
   const n = activeJobs().length;
   $("#tasksBtn").innerHTML = n ? `<span class="spinner"></span>${n}` : "⏱";
   $("#tasksBtn").classList.toggle("active", n > 0);
@@ -712,6 +788,25 @@ function bind() {
 
   $("#importBtn") && ($("#importBtn").onclick = () => enqueue("/api/profile/import", {}, "Import resume"));
   $("#tasksBtn").onclick = () => { state.sel = "tasks"; state.app = null; state.err = null; render(); };
+  $("#feedBtn").onclick = () => { state.sel = "feed"; state.app = null; state.err = null; render(); loadFeed().then(render); };
+  if (state.sel === "feed") {
+    document.querySelectorAll("[data-feed-filter]").forEach((b) => b.onclick = () => { state.feedFilter = b.dataset.feedFilter; loadFeed().then(render); });
+    $("#feedRefresh") && ($("#feedRefresh").onclick = () => enqueue("/api/feed/refresh", {}));
+    $("#feedScore") && ($("#feedScore").onclick = () => enqueue("/api/feed/score", {}));
+    document.querySelectorAll("[data-feed-score1]").forEach((b) => b.onclick = () => enqueue("/api/feed/score", { ids: [Number(b.dataset.feedScore1)] }));
+    document.querySelectorAll("[data-feed-track]").forEach((b) => b.onclick = () => enqueue(`/api/feed/${b.dataset.feedTrack}/track`, {}));
+    document.querySelectorAll("[data-feed-dismiss]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedDismiss}/dismiss`); await loadFeed(); }));
+    document.querySelectorAll("[data-feed-restore]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedRestore}/restore`); await loadFeed(); }));
+    document.querySelectorAll("[data-open-app]").forEach((b) => b.onclick = () => open(Number(b.dataset.openApp)));
+    $("#feedPurge") && ($("#feedPurge").onclick = () => run(null, async () => { await api("DELETE", "/api/feed/dismissed"); await loadFeed(); }));
+    $("#fTestBtn") && ($("#fTestBtn").onclick = () => { const board = $("#fTest").value; run("Testing board…", async () => { state.feedTest = await api("POST", "/api/feed/test", { board }); }); });
+    $("#fSave") && ($("#fSave").onclick = () => {
+      const body = { keywords: $("#fKeywords").value, locations: $("#fLocations").value, exclude: $("#fExclude").value, boards: $("#fBoards").value,
+        aggregators: Object.fromEntries([...document.querySelectorAll("[data-agg]")].map((c) => [c.dataset.agg, c.checked])),
+        minScore: $("#fMin").value, scorePerRefresh: $("#fCap").value, autoHours: $("#fAuto").value };
+      run("Saving feed settings…", async () => { await api("PUT", "/api/feed/settings", body); await loadFeed(); });
+    });
+  }
   $("#goalMini") && ($("#goalMini").onclick = () => { state.sel = "goals"; state.app = null; state.err = null; render(); loadGoals().then(render); });
   $("#gSave") && ($("#gSave").onclick = () => {
     const body = { daily: $("#gDaily").value, weekly: $("#gWeekly").value, monthly: $("#gMonthly").value, weekends: $("#gWeekends").checked, followupDays: $("#gFollow").value };
@@ -866,6 +961,7 @@ async function waitForCapture() {
 (async () => {
   [state.profile, state.settings, state.jobs, state.goals] = await Promise.all([api("GET", "/api/profile"), api("GET", "/api/settings"), api("GET", "/api/jobs"), api("GET", "/api/goals").catch(() => null)]);
   await loadList();
+  api("GET", "/api/feed?status=open").then((f) => { state.feedHot = f.counts.hot; renderSidebar(); }).catch(() => {});
   if (new URLSearchParams(location.search).get("capture")) { state.sel = "new"; state.busy = "Waiting for the page from your browser…"; waitForCapture(); }
   render();
   if ($("#bankQ")) $("#bankQ").dispatchEvent(new Event("input"));

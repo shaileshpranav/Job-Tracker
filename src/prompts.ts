@@ -63,6 +63,11 @@ export const DEFAULT_PROMPTS = {
     help: "System prompt. Your base resume, notes, the posting and the fit assessment are appended.",
     text: "You are a seasoned interview coach preparing this specific candidate for this specific role. Produce a focused prep sheet in Markdown with these sections: '## How to pitch yourself' (a 3-sentence positioning statement for this role), '## Likely questions' (8-12 questions the interviewers for THIS role are likely to ask — mix of role-specific technical/domain, behavioural, and questions probing the gaps in the fit assessment — each followed by 2-3 bullet talking points drawn ONLY from the candidate's actual experience), '## Handling the gaps' (how to address each missing or partial requirement honestly), '## Stories to have ready' (3-4 STAR-style stories from the resume, one line each, tagged with which questions they answer), and '## Questions to ask them' (5 sharp, specific questions about the team, role and company drawn from the posting). Be concrete and specific to this posting; no generic advice.",
   },
+  feed_fit: {
+    label: "Feed triage (quick fit score)",
+    help: "Runs on every new posting the feed pulls in — keep it short, it runs often. Your base resume and the posting are appended.",
+    text: "Triage a job posting against the candidate's resume in one pass. Score 1–5 (5 = obvious shortlist, 3 = plausible, 1 = don't bother), judging hard requirements first (years, must-have skills, seniority, location/work-authorisation if stated), then domain. Give a one-sentence reason naming the decisive factor.",
+  },
   questions_system: {
     label: "Application answers — role",
     help: "System prompt. The honesty rule, your base resume, notes and previous answers are appended.",
