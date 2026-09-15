@@ -239,6 +239,13 @@
   .doc-group.gen { flex:1 1 300px; } .gen-note { width:100%; max-width:560px; font-size:13px; padding:6px 9px; }
   .pdf-frame { display:block; width:100%; aspect-ratio:8.5/11; min-height:480px; border:1px solid var(--line); border-radius:var(--radius-s); background:#fff; }
   .banner.dup { display:flex; gap:10px 16px; align-items:center; flex-wrap:wrap; justify-content:space-between; background:var(--accent-soft); }
+  /* settings sections */
+  .settings { display:grid; grid-template-columns:184px minmax(0, 1fr); gap:18px; align-items:start; }
+  .settings-nav { position:sticky; top:0; display:flex; flex-direction:column; gap:2px; }
+  .settings-nav button { display:flex; align-items:center; gap:8px; width:100%; text-align:left; border:0; background:none; padding:8px 10px; border-radius:var(--radius-s); color:var(--mute); font-weight:500; }
+  .settings-nav button span:first-child { width:20px; text-align:center; } .settings-nav button:hover { background:var(--panel-2); color:var(--ink); } .settings-nav button.on { background:var(--accent-soft); color:var(--accent-soft-ink); }
+  .settings-nav .pill, .settings-nav .dot-mark { margin-left:auto; } .dot-mark { width:8px; height:8px; border-radius:50%; display:inline-block; } .dot-mark.bad { background:var(--bad); } .dot-mark.warn { background:var(--warn); }
+  .settings-body > .card:last-child { margin-bottom:0; }
   /* apply panel */
   .apply { background:var(--panel-2); border:1px solid var(--line-2); border-radius:var(--radius-s); padding:10px 14px 12px; margin:0 0 6px; }
   .apply-row { display:flex; gap:10px; align-items:center; padding:7px 0; border-top:1px solid var(--line-2); font-size:13px; } .apply-row .sp { flex:1; }
@@ -271,6 +278,8 @@
     .fitgrid { grid-template-columns:1fr; } .task-row { grid-template-columns:1fr; }
     .doc-group > div { flex-wrap:wrap; }
     .apply-row { flex-wrap:wrap; } .apply-done input#applyNextTxt { width:100%; }
+    .settings { grid-template-columns:1fr; gap:10px; } .settings-nav { position:static; flex-direction:row; overflow-x:auto; scrollbar-width:none; padding-bottom:2px; }
+    .settings-nav button { width:auto; white-space:nowrap; flex:none; min-height:36px; } .settings-nav button span:first-child { width:auto; }
   }
   @media (hover: none) { .row:hover { background:inherit; } .row.sel { background:var(--accent-soft); } }
 </style>

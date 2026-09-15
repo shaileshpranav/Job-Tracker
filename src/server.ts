@@ -2,7 +2,7 @@ import http from "node:http";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { db, getApp, logEvent, slugify, touch, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
+import { db, getApp, logEvent, touch, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
 import { resumeSize, ONE_PAGE } from "./ai.ts";
 import { renderTex, contentHash, readTemplate, writeTemplate } from "./latex.ts";
 import { listPrompts, savePrompt } from "./prompts.ts";
@@ -21,6 +21,7 @@ import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile 
 import { hostOf } from "./jobs.ts";
 import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
 import { preflight } from "./preflight.ts";
+import { pdfFileName, candidateName, DEFAULT_PDF_NAME } from "./filenames.ts";
 import { canonicalUrl } from "./scrape.ts";
 
 const PORT = Number(process.env.PORT ?? 4321);
@@ -48,7 +49,7 @@ function appDetail(app: Application) {
     has_source_text: Boolean(source_text?.trim()),
     requirements: app.requirements ? JSON.parse(app.requirements) : [],
     documents: (db.prepare("SELECT id, kind, file, created_at, content, pages, pdf_hash, instructions, tex IS NOT NULL AS custom_tex, original IS NOT NULL AND original != content AS edited FROM documents WHERE application_id = ? ORDER BY id DESC").all(app.id) as any[])
-      .map(({ pdf_hash, ...d }) => { const hash = contentHash(d.custom_tex ? (db.prepare("SELECT tex FROM documents WHERE id = ?").get(d.id) as any).tex : d.content); return { ...d, custom_tex: Boolean(d.custom_tex), edited: Boolean(d.edited), size: resumeSize(d.content), pdf_current: pdf_hash === hash, hash: hash.slice(0, 10) }; }),
+      .map(({ pdf_hash, ...d }) => { const hash = contentHash(d.custom_tex ? (db.prepare("SELECT tex FROM documents WHERE id = ?").get(d.id) as any).tex : d.content); return { ...d, custom_tex: Boolean(d.custom_tex), edited: Boolean(d.edited), size: resumeSize(d.content), pdf_current: pdf_hash === hash, hash: hash.slice(0, 10), file_name: pdfFileName(app, d.kind) }; }),
     one_page: ONE_PAGE,
     latex: isLatexReady(),
     questions: db.prepare("SELECT * FROM questions WHERE application_id = ? ORDER BY id").all(app.id),
@@ -160,7 +161,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
 
   // LLM settings
   // Every settings response has the same shape — the client swaps the whole object in.
-  const settingsPayload = () => ({ ...llmSettings(), providers: PROVIDERS, latex: isLatexReady(), auth: authStatus() });
+  const settingsPayload = () => ({ ...llmSettings(), providers: PROVIDERS, latex: isLatexReady(), auth: authStatus(), pdfNameDefault: DEFAULT_PDF_NAME, pdfNameExample: pdfFileName({ company: "Acme" }, "resume"), candidate: candidateName() });
   if (m("GET", /^\/api\/settings$/)) return send(res, 200, settingsPayload());
   if (m("PUT", /^\/api\/settings$/)) { saveLlmSettings(await readJson(req)); return send(res, 200, settingsPayload()); }
   if ((r = m("PUT", /^\/api\/settings\/tasks\/(\w+)$/))) {
@@ -520,8 +521,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if ((r = m("GET", /^\/doc\/(\d+)\.pdf$/))) {
     const { pdf } = await buildPdf(Number(r[1]));
-    const doc = db.prepare("SELECT d.kind, a.company FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(Number(r[1])) as any;
-    const name = `${slugify(doc.company)}-${doc.kind === "resume" ? "resume" : "cover-letter"}.pdf`;
+    const doc = db.prepare("SELECT d.kind, a.company, a.resume_key FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(Number(r[1])) as any;
+    const name = pdfFileName(doc, doc.kind);
     res.writeHead(200, { "content-type": "application/pdf", "content-disposition": `inline; filename="${name}"`, "cache-control": "no-store" });
     return res.end(pdf);
   }
@@ -531,9 +532,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     return send(res, 200, renderTex(doc.content, doc.kind, doc.kind === "cover_letter" ? await letterHeader() : undefined), "text/plain; charset=utf-8");
   }
   if ((r = m("GET", /^\/doc\/(\d+)$/))) {
-    const doc = db.prepare("SELECT d.*, a.company, a.role FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(Number(r[1])) as any;
+    const doc = db.prepare("SELECT d.*, a.company, a.role, a.resume_key FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(Number(r[1])) as any;
     if (!doc) throw new HttpError(404, "Document not found");
-    return send(res, 200, printPage(`${doc.kind === "resume" ? "Resume" : "Cover letter"} — ${doc.company}`, doc.content, doc.kind), "text/html");
+    // The page title is what "Save as PDF" suggests as the file name.
+    return send(res, 200, printPage(pdfFileName(doc, doc.kind).replace(/\.pdf$/, ""), doc.content, doc.kind), "text/html");
   }
 
   // questions

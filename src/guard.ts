@@ -142,7 +142,7 @@ export async function guarded<T>(task: Task, check: Check, attempt: (route: Rout
   if (!problems.length) { recordOutcome(first, true); return result; }
   recordOutcome(first, false, problems.join("; "));
   const fb = guardSettings().enabled ? resolveFallback(first) : null;
-  if (!fb) throw new Error(`${routeId(first)} returned unusable output (${problems[0]}${problems.length > 1 ? ` +${problems.length - 1} more` : ""}). No fallback model is configured — set one in Settings → Model quality guard, or route this task to a stronger model.`);
+  if (!fb) throw new Error(`${routeId(first)} returned unusable output (${problems[0]}${problems.length > 1 ? ` +${problems.length - 1} more` : ""}). No fallback model is configured — set one in Settings → Quality guard, or route this task to a stronger model.`);
   report(`${first.model} returned junk (${problems[0]}) — retrying with ${fb.model}…`);
   const second = await attempt(fb);
   const again = check(second, ctx);
