@@ -2,7 +2,7 @@ import http from "node:http";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { db, getApp, logEvent, slugify, touch, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
+import { db, getApp, logEvent, slugify, touch, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
 import { resumeSize, ONE_PAGE } from "./ai.ts";
 import { renderTex, contentHash, readTemplate, writeTemplate } from "./latex.ts";
 import { listPrompts, savePrompt } from "./prompts.ts";
@@ -45,7 +45,7 @@ function appDetail(app: Application) {
     resumes: listResumes().filter((x) => x.hasMarkdown).map(({ key, label }) => ({ key, label })),
     has_source_text: Boolean(source_text?.trim()),
     requirements: app.requirements ? JSON.parse(app.requirements) : [],
-    documents: (db.prepare("SELECT id, kind, file, created_at, content, pages, pdf_hash, tex IS NOT NULL AS custom_tex, original IS NOT NULL AND original != content AS edited FROM documents WHERE application_id = ? ORDER BY id DESC").all(app.id) as any[])
+    documents: (db.prepare("SELECT id, kind, file, created_at, content, pages, pdf_hash, instructions, tex IS NOT NULL AS custom_tex, original IS NOT NULL AND original != content AS edited FROM documents WHERE application_id = ? ORDER BY id DESC").all(app.id) as any[])
       .map(({ pdf_hash, ...d }) => ({ ...d, custom_tex: Boolean(d.custom_tex), edited: Boolean(d.edited), size: resumeSize(d.content), pdf_current: pdf_hash === contentHash(d.custom_tex ? (db.prepare("SELECT tex FROM documents WHERE id = ?").get(d.id) as any).tex : d.content) })),
     one_page: ONE_PAGE,
     latex: isLatexReady(),
@@ -393,7 +393,25 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const names: Record<string, string> = { resume: "Tailored resume", cover_letter: "Cover letter", both: "Resume + cover letter" };
     if (!names[what]) throw new HttpError(400, "Bad 'what'");
     const emphasize = Array.isArray(body.emphasize) ? body.emphasize.map(String).slice(0, 25) : [];
-    return send(res, 202, { job: enqueue("generate", `${names[what]}${emphasize.length ? " (ATS terms)" : ""} — ${app.company}`, { what, emphasize }, app.id) });
+    const instructions = String(body.instructions ?? "").trim().slice(0, 1000);
+    const tag = emphasize.length ? " (ATS terms)" : instructions ? " (with your notes)" : "";
+    return send(res, 202, { job: enqueue("generate", `${names[what]}${tag} — ${app.company}`, { what, emphasize, instructions }, app.id) });
+  }
+  // Apply pack: make sure the current PDFs are on disk, then show the application folder in Finder.
+  if ((r = m("POST", /^\/api\/applications\/(\d+)\/reveal$/))) {
+    const app = mustApp(r[1]);
+    const dir = path.join(APPS_DIR, app.folder!);
+    fs.mkdirSync(dir, { recursive: true });
+    if (isLatexReady()) {
+      for (const kind of ["resume", "cover_letter"]) {
+        const doc = db.prepare("SELECT id FROM documents WHERE application_id = ? AND kind = ? ORDER BY id DESC LIMIT 1").get(app.id, kind) as { id: number } | undefined;
+        if (doc) await buildPdf(doc.id).catch((e) => console.error("PDF build failed:", e.message));
+      }
+    }
+    if (db.prepare("SELECT 1 FROM questions WHERE application_id = ? LIMIT 1").get(app.id)) writeQuestionsFile(app);
+    const files = fs.readdirSync(dir).filter((f) => !f.startsWith(".")).sort();
+    if (process.platform === "darwin") spawn("open", [dir], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
+    return send(res, 200, { ok: process.platform === "darwin", path: dir, files });
   }
   // ATS keyword check: deterministic comparison of a document (or a base resume) with the posting
   if ((r = m("GET", /^\/api\/applications\/(\d+)\/ats$/))) {
