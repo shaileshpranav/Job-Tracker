@@ -2,7 +2,8 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null, settingsSection: "model" };
+try { state.settingsSection = localStorage.getItem("settingsSection") || "model"; } catch {}
 
 // ---------- drafts: unsaved edits survive tab switches, background re-renders and reloads ----------
 // Any input/textarea with data-draft="key" is tracked: what you type is kept in state.drafts
@@ -541,13 +542,21 @@ const PROVIDER_HELP = {
 
 function modelsFor(provider) { return state.modelCache[provider] || []; }
 
+const SETTINGS_SECTIONS = [["model", "🧠", "Model"], ["tasks", "🔀", "Per-task models"], ["guard", "🛡", "Quality guard"], ["resumes", "📄", "Base resumes"], ["documents", "📝", "Documents"], ["prompts", "💬", "Prompts"], ["security", "🔒", "Security"]];
 function renderSettings() {
   const s = state.settings;
   const models = modelsFor(s.provider);
   const local = s.provider === "ollama";
   const keyMask = s.keys[s.provider], keySrc = s.keySource[s.provider];
-  return `${busy()}${errBox()}
-    <div class="card"><h2>Default model</h2>
+  const sec = SETTINGS_SECTIONS.some(([k]) => k === state.settingsSection) ? state.settingsSection : "model";
+  // Status marks on the section list: things that need attention at a glance.
+  const marks = {
+    model: !local && !keyMask ? '<span class="dot-mark bad" title="No API key for this provider"></span>' : "",
+    guard: state.guard?.unreliable.length ? `<span class="pill bad" title="Tasks routed to models that returned junk">${state.guard.unreliable.length}</span>` : "",
+    security: !s.auth.enabled ? '<span class="dot-mark warn" title="No password set"></span>' : "",
+  };
+  const cards = {
+    model: () => `<div class="card"><h2>Default model</h2>
       <div class="field"><label>Provider</label>
         <div class="seg">${s.providers.map((p) => `<button data-provider="${p}" class="${p === s.provider ? "on" : ""}">${p}</button>`).join("")}</div></div>
       <p class="muted">${PROVIDER_HELP[s.provider]}</p>
@@ -570,9 +579,8 @@ function renderSettings() {
           <button id="sSave">Use typed model id</button>
           <button class="ghost" id="sLoad">${models.length ? `↻ Reload list (${models.length})` : "Load available models"}</button>
         </div></div>
-    </div>
-
-    <div class="card"><h2>Security</h2>
+    </div>`,
+    security: () => `<div class="card"><h2>Security</h2>
       <p class="muted">${s.auth.enabled
         ? `Password required to open this app${s.auth.source === "env" ? " (set via <code>AUTH_PASSWORD</code> in .env)" : ""}. Sessions last 30 days per browser.`
         : "No password set — if this server is reachable on your network (see the phone URL printed at startup), anyone on it can open the app."}</p>
@@ -582,9 +590,8 @@ function renderSettings() {
           <button id="sAuthSave" class="primary">Save</button>
           ${s.auth.enabled && s.auth.source === "app" ? `<button id="sAuthClear">Remove password</button>` : ""}
         </div></div>
-    </div>
-
-    <div class="card"><h2>Base resumes</h2>
+    </div>`,
+    resumes: () => `<div class="card"><h2>Base resumes</h2>
       <p class="muted">One base is fine; two or three (e.g. “AI engineer” and “Platform / backend”) let the fit score pick the better one per posting and tailor from it. Files live in <code>profile/</code> as <code>resume.md</code> (default) and <code>resume-&lt;name&gt;.md</code>; drop a matching <code>resume-&lt;name&gt;.pdf</code> to import one.</p>
       ${(state.profile?.resumes || []).map((r) => `<div class="base-row" data-base-key="${esc(r.key)}">
         <div class="sp"><b>${esc(r.label)}</b> <span class="muted">· ${esc(r.file || r.source || "")}${r.hasMarkdown ? ` · ${r.words} words` : " · not imported yet"}${r.key === "default" ? " · default" : ""}</span></div>
@@ -592,27 +599,11 @@ function renderSettings() {
         ${r.key !== "default" && r.hasMarkdown ? `<button class="ghost" data-base-del="${esc(r.key)}" title="Delete this base">×</button>` : ""}
       </div>${state.baseEdit?.key === r.key ? `<div style="margin:6px 0 12px"><textarea class="doc" id="baseText" style="min-height:320px">${esc(state.baseEdit.markdown)}</textarea><div class="toolbar" style="margin:6px 0 0"><button class="primary" id="baseSave">Save</button><span class="muted">Add <code>&lt;!-- label: Platform / backend --&gt;</code> as the first line to name it.</span></div></div>` : ""}`).join("")}
       <div class="toolbar" style="margin-top:10px"><input id="baseNew" placeholder="new base name, e.g. platform" style="width:220px"><span class="muted">copy of</span><div class="seg">${(state.profile?.resumes || []).filter((r) => r.hasMarkdown).map((r, i) => `<button data-base-from="${esc(r.key)}" class="${i === 0 ? "on" : ""}">${esc(r.label)}</button>`).join("")}</div><button id="baseCreate">Create</button></div>
+    </div>`,
+    documents: () => `<div class="card"><h2>PDF file names</h2>
+      <p class="muted">What the recruiter sees in the upload. <code>{name}</code> comes from the heading of the base resume the application uses${s.candidate ? ` (currently <b>${esc(s.candidate)}</b>)` : " — none found yet"}; <code>{kind}</code> is <code>Resume</code> or <code>Cover-Letter</code>; <code>{company}</code> is the employer. Spaces become hyphens.</p>
+      <div class="toolbar" style="margin:0"><input id="sPdfName" value="${esc(s.pdfName || "")}" placeholder="${esc(s.pdfNameDefault)}" style="width:260px"><button id="sPdfNameSave" class="primary">Save</button><span class="muted">→ e.g. <code>${esc(s.pdfNameExample)}</code></span></div>
     </div>
-
-    <div class="card"><h2>Learned formatting preferences</h2>
-      <p class="muted">Rules the app has learned from your manual edits (🎓 on a resume / cover letter tab). Injected into every future generation as formatting guidance only — they never add or change facts. Edit freely; one rule per line.</p>
-      ${state.style ? ["resume", "cover_letter"].map((k) => `<details class="prompt" data-style="${k}" ${state.style[k] ? "open" : ""}>
-        <summary>${k === "resume" ? "Resume" : "Cover letter"} ${state.style[k] ? `<span class="pill accent">${state.style[k].split("\n").filter(Boolean).length} rules</span>` : '<span class="muted">none yet</span>'}</summary>
-        <textarea class="styleText" style="min-height:120px;margin-top:6px" placeholder="- Keep every bullet to one line and start it with a verb\n- Put Education last\n- Dates as 'Mon YYYY – Mon YYYY'">${esc(state.style[k])}</textarea>
-        <div class="toolbar" style="margin:6px 0 0"><button class="primary" data-style-save="${k}">Save</button>${state.style[k] ? `<button data-style-reset="${k}">Clear</button>` : ""}</div>
-      </details>`).join("") : '<p class="muted">Loading…</p>'}
-    </div>
-
-    <div class="card"><h2>Prompts</h2>
-      <p class="muted">Edit the instructions each task sends to the model. Your resume, notes, the job posting and previous answers are appended automatically — these are just the instruction parts. Blank = default.</p>
-      ${state.prompts ? state.prompts.map((p) => `<details class="prompt" data-prompt="${p.key}" ${p.custom ? "open" : ""}>
-        <summary>${esc(p.label)} ${p.custom ? '<span class="pill warn">customised</span>' : ""}</summary>
-        <div class="muted" style="margin:6px 0">${esc(p.help)}</div>
-        <textarea class="promptText" style="min-height:110px">${esc(p.current)}</textarea>
-        <div class="toolbar" style="margin:6px 0 0"><button class="primary" data-prompt-save="${p.key}">Save</button>${p.custom ? `<button data-prompt-reset="${p.key}">Reset to default</button>` : ""}</div>
-      </details>`).join("") : '<p class="muted">Loading…</p>'}
-    </div>
-
     ${state.settings.latex !== false ? `<div class="card"><h2>PDF templates (LaTeX)</h2>
       <p class="muted">Global look of every generated PDF. Placeholders <code>{{NAME}}</code>, <code>{{CONTACT}}</code>, <code>{{BODY}}</code> (and <code>{{DATE}}</code> for letters) are filled from the Markdown. Spacing levers: <code>geometry</code> margins, <code>\\linespread</code>, <code>\\parskip</code>, <code>\\setlist</code> itemsep, <code>\\titlespacing</code>.</p>
       ${state.templates ? ["resume", "cover_letter"].map((k) => `<details class="prompt" data-template="${k}" ${state.templates[k].custom ? "open" : ""}>
@@ -621,8 +612,24 @@ function renderSettings() {
         <div class="toolbar" style="margin:6px 0 0"><button class="primary" data-template-save="${k}">Save</button>${state.templates[k].custom ? `<button data-template-reset="${k}">Reset to default</button>` : ""}</div>
       </details>`).join("") : '<p class="muted">Loading…</p>'}
     </div>` : ""}
-
-    <div class="card"><h2>Model quality guard</h2>
+    <div class="card"><h2>Learned formatting preferences</h2>
+      <p class="muted">Rules the app has learned from your manual edits (🎓 on a resume / cover letter tab). Injected into every future generation as formatting guidance only — they never add or change facts. Edit freely; one rule per line.</p>
+      ${state.style ? ["resume", "cover_letter"].map((k) => `<details class="prompt" data-style="${k}" ${state.style[k] ? "open" : ""}>
+        <summary>${k === "resume" ? "Resume" : "Cover letter"} ${state.style[k] ? `<span class="pill accent">${state.style[k].split("\n").filter(Boolean).length} rules</span>` : '<span class="muted">none yet</span>'}</summary>
+        <textarea class="styleText" style="min-height:120px;margin-top:6px" placeholder="- Keep every bullet to one line and start it with a verb\n- Put Education last\n- Dates as 'Mon YYYY – Mon YYYY'">${esc(state.style[k])}</textarea>
+        <div class="toolbar" style="margin:6px 0 0"><button class="primary" data-style-save="${k}">Save</button>${state.style[k] ? `<button data-style-reset="${k}">Clear</button>` : ""}</div>
+      </details>`).join("") : '<p class="muted">Loading…</p>'}
+    </div>`,
+    prompts: () => `<div class="card"><h2>Prompts</h2>
+      <p class="muted">Edit the instructions each task sends to the model. Your resume, notes, the job posting and previous answers are appended automatically — these are just the instruction parts. Blank = default.</p>
+      ${state.prompts ? state.prompts.map((p) => `<details class="prompt" data-prompt="${p.key}" ${p.custom ? "open" : ""}>
+        <summary>${esc(p.label)} ${p.custom ? '<span class="pill warn">customised</span>' : ""}</summary>
+        <div class="muted" style="margin:6px 0">${esc(p.help)}</div>
+        <textarea class="promptText" style="min-height:110px">${esc(p.current)}</textarea>
+        <div class="toolbar" style="margin:6px 0 0"><button class="primary" data-prompt-save="${p.key}">Save</button>${p.custom ? `<button data-prompt-reset="${p.key}">Reset to default</button>` : ""}</div>
+      </details>`).join("") : '<p class="muted">Loading…</p>'}
+    </div>`,
+    guard: () => `<div class="card"><h2>Model quality guard</h2>
       <p class="muted">Every structured result (captured job, fit score, answers…) is sanity-checked — placeholder values like <code>O-7</code>, leaked JSON, empty fields, repeated tokens. Junk is recorded against the model and the call is retried once on a stronger fallback.</p>
       ${state.guard ? `
       <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;color:var(--ink)"><input type="checkbox" id="guardOn" ${state.guard.settings.enabled ? "checked" : ""} style="width:auto"> Enabled</label>
@@ -632,9 +639,8 @@ function renderSettings() {
       ${state.guard.unreliable.length ? `<div class="banner">⚠ Unreliable routing: ${state.guard.unreliable.map((u) => `<b>${esc(u.task)}</b> → ${esc(u.provider)} · ${esc(u.model)}`).join(", ")} — these models have returned junk in ≥30% of calls. Route them to something stronger below.</div>` : ""}
       ${state.guard.stats.length ? `<table class="stats"><tr><th>Model</th><th>OK</th><th>Junk</th><th>Rate</th><th>Last problem</th></tr>${state.guard.stats.map((m) => `<tr class="${m.junkRate >= 30 && m.total >= 3 ? "bad" : ""}"><td>${esc(m.id)}</td><td>${m.ok}</td><td>${m.junk}</td><td>${m.junkRate}%</td><td class="muted">${esc(m.lastProblem || "")}</td></tr>`).join("")}</table>
       <div class="toolbar" style="margin:8px 0 0"><button class="ghost" id="guardClear">Clear statistics</button></div>` : '<p class="muted">No calls recorded yet.</p>'}` : '<p class="muted">Loading…</p>'}
-    </div>
-
-    <div class="card"><h2>Per-task models</h2>
+    </div>`,
+    tasks: () => `<div class="card"><h2>Per-task models</h2>
       <p class="muted">Optional. Route individual tasks to a different provider/model — e.g. a free local model for capture, a strong hosted model for writing. Tasks left on “default” use the model above.</p>
       ${Object.entries(s.taskNames).map(([t, name]) => {
         const r = s.tasks[t];
@@ -646,6 +652,12 @@ function renderSettings() {
           ${r ? comboHtml(`task_${t}`, r.provider, modelsFor(r.provider), r.model) : ""}
         </div>`;
       }).join("")}
+    </div>`,
+  };
+  return `${busy()}${errBox()}
+    <div class="settings">
+      <nav class="settings-nav">${SETTINGS_SECTIONS.map(([k, ic, n]) => `<button data-settings-section="${k}" class="${k === sec ? "on" : ""}"><span>${ic}</span>${n}${marks[k] || ""}</button>`).join("")}</nav>
+      <div class="settings-body fade">${cards[sec]()}</div>
     </div>`;
 }
 
@@ -686,7 +698,7 @@ function renderHome() {
   const due = state.apps.filter((a) => a.due);
   const steps = [
     { done: !!p?.hasMarkdown, name: "Import your base resume", hint: p?.hasSource ? `Found ${p.files.filter((x) => /\.(pdf|docx)$/i.test(x)).join(", ")} in profile/ — one click converts it to Markdown.` : "Drop resume.pdf or resume.docx into the profile/ folder, then reload.", action: p?.hasSource && !p?.hasMarkdown ? `<button class="primary" id="importBtn">Import</button>` : "" },
-    { done: st && (st.provider === "ollama" || !!st.keys?.[st.provider]), name: "Connect a model", hint: st ? `${st.provider} · ${st.model}` : "", action: `<button data-nav="settings">Settings</button>` },
+    { done: st && (st.provider === "ollama" || !!st.keys?.[st.provider]), name: "Connect a model", hint: st ? `${st.provider} · ${st.model}` : "", action: `<button data-nav="settings:model">Settings</button>` },
     { done: !!(f?.settings?.keywords?.length || state.feedKeywords), name: "Set up the job feed", hint: "Keywords, locations and a few company boards — new postings get scored for fit automatically.", action: `<button data-nav="feed">Feed</button>` },
     { done: state.apps.length > 0, name: "Capture your first posting", hint: "Paste a URL, the text, or use the bookmarklet from any job page.", action: `<button data-nav="new">+ New</button>` },
   ];
@@ -788,7 +800,7 @@ function renderApply(a) {
     if (!doc) return `<div class="apply-row"><span class="ic bad">✗</span><div class="sp"><b>${label}</b> <span class="muted">not generated yet</span></div><button data-gen="${kind}">✨ Generate</button></div>`;
     const pages = doc.pages && doc.pdf_current ? `${doc.pages} page${doc.pages > 1 ? "s" : ""}` : "";
     const warn = kind === "resume" && doc.pages > 1 && doc.pdf_current;
-    return `<div class="apply-row"><span class="ic ${warn ? "warn" : "ok"}">${warn ? "!" : "✓"}</span><div class="sp"><b>${label}</b> <span class="muted">v${count(kind)}${pages ? ` · ${warn ? `<span style="color:var(--warn)">${pages}</span>` : pages}` : ""}${doc.edited ? " · edited by you" : ""}${doc.instructions ? ` · “${esc(doc.instructions.slice(0, 40))}${doc.instructions.length > 40 ? "…" : ""}”` : ""}</span></div>
+    return `<div class="apply-row"><span class="ic ${warn ? "warn" : "ok"}">${warn ? "!" : "✓"}</span><div class="sp"><b>${label}</b> <span class="muted">v${count(kind)}${pages ? ` · ${warn ? `<span style="color:var(--warn)">${pages}</span>` : pages}` : ""}${doc.edited ? " · edited by you" : ""}${doc.instructions ? ` · “${esc(doc.instructions.slice(0, 40))}${doc.instructions.length > 40 ? "…" : ""}”` : ""}${doc.file_name ? ` · <code title="File name the recruiter sees — change the pattern in Settings → Documents">${esc(doc.file_name)}</code>` : ""}</span></div>
       ${a.latex ? `<a href="/doc/${doc.id}.pdf" target="_blank"><button>⬇ PDF</button></a>` : `<a href="/doc/${doc.id}" target="_blank"><button>Print / Save as PDF</button></a>`}</div>`;
   };
   const n = a.questions.length;
@@ -873,7 +885,7 @@ function renderDoc(a, kind) {
   if (doc) {
     if (mode === "edit") body = `${doc.custom_tex ? `<div class="banner">This version has hand-edited LaTeX. Saving Markdown edits regenerates the LaTeX from the Markdown (your TeX tweaks will be dropped).</div>` : ""}<textarea class="doc" id="docText" data-draft="${mdKey}">${esc(doc.content)}</textarea>`;
     else if (mode === "tex") body = state.tex && state.tex.id === doc.id
-      ? `<div class="muted" style="margin-bottom:6px">Full document — edit anything. To fit one page, the usual levers are near the top: <code>geometry</code> margins, <code>\\linespread</code>, <code>\\parskip</code>, the <code>itemsep</code>/<code>topsep</code> in <code>\\setlist</code>, <code>\\titlespacing</code>, and the <code>[10.5pt]</code> in <code>\\documentclass</code>. Global changes belong in Settings → PDF templates.</div>
+      ? `<div class="muted" style="margin-bottom:6px">Full document — edit anything. To fit one page, the usual levers are near the top: <code>geometry</code> margins, <code>\\linespread</code>, <code>\\parskip</code>, the <code>itemsep</code>/<code>topsep</code> in <code>\\setlist</code>, <code>\\titlespacing</code>, and the <code>[10.5pt]</code> in <code>\\documentclass</code>. Global changes belong in Settings → Documents → PDF templates.</div>
          <textarea class="doc" id="texText" spellcheck="false" style="min-height:480px" data-draft="${texKey}">${esc(state.tex.tex)}</textarea>
          <div class="toolbar" style="margin-top:8px"><button class="primary" id="texSave">Save & rebuild PDF</button>${state.tex.custom ? `<button id="texReset">Reset to generated</button>` : ""}<button class="ghost" data-discard="${texKey}" data-dirty-for="${texKey}" hidden>Discard edits</button><span class="pill warn" data-dirty-for="${texKey}" hidden>unsaved</span><div class="sp"></div><span class="muted" id="texResult"></span></div>`
       : `<p class="muted"><span class="spinner"></span>Loading LaTeX…</p>`;
@@ -1006,6 +1018,7 @@ const errBox = () => state.err ? `<div class="errbar"><span>✗ ${esc(state.err)
 // Switch main view. Views that load data do so lazily and re-render when it lands.
 function go(view) {
   state.app = null; state.err = null; state.dup = null;
+  if (view.startsWith("settings:")) { state.settingsSection = view.slice(9); view = "settings"; }
   if (view === "apps") { state.sel = null; render(true); return; }
   if (view === "home") { state.sel = isPhone() ? "home" : null; state.activity = null; api("GET", "/api/activity").then((a) => { state.activity = a; render(); }).catch(() => { state.activity = []; render(); }); }
   else state.sel = view;
@@ -1055,11 +1068,14 @@ function bind() {
   $("#backBtn") && ($("#backBtn").onclick = () => go(isPhone() ? "apps" : "home"));
   document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; state.editJob = false; state.docMode = "preview"; state.tex = null; state.err = null; render(); });
 
-  if ($("#sSave")) {
+  if (state.sel === "settings") {
+    document.querySelectorAll("[data-settings-section]").forEach((b) => b.onclick = () => { state.settingsSection = b.dataset.settingsSection; try { localStorage.setItem("settingsSection", state.settingsSection); } catch {} state.err = null; render(true); $("#main").scrollTop = 0; });
     const saveDefault = (body, label) => run(label, async () => { state.settings = await api("PUT", "/api/settings", body); });
     document.querySelectorAll("[data-provider]").forEach((b) => b.onclick = () => saveDefault({ provider: b.dataset.provider }, `Switching to ${b.dataset.provider}…`));
-    $("#sSave").onclick = () => { const model = $("#sModel").value.trim(); if (!model) { state.err = "Type a model id first."; render(); return; } saveDefault({ model }, "Saving…"); };
-    $("#sLoad").onclick = () => run("Fetching model list…", () => loadModels(state.settings.provider, false));
+    $("#sSave") && ($("#sSave").onclick = () => { const model = $("#sModel").value.trim(); if (!model) { state.err = "Type a model id first."; render(); return; } saveDefault({ model }, "Saving…"); });
+    $("#sLoad") && ($("#sLoad").onclick = () => run("Fetching model list…", () => loadModels(state.settings.provider, false)));
+    $("#sPdfNameSave") && ($("#sPdfNameSave").onclick = () => saveDefault({ pdfName: $("#sPdfName").value }, "Saving…"));
+    $("#sPdfName") && ($("#sPdfName").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("#sPdfNameSave").click(); } });
     $("#sKeySave") && ($("#sKeySave").onclick = () => { const apiKey = $("#sKey").value.trim(); if (!apiKey) { state.err = "Paste a key first."; render(); return; } run("Saving key…", async () => { state.settings = await api("PUT", "/api/settings", { apiKey }); delete state.modelCache[state.settings.provider]; await loadModels(state.settings.provider, true); }); });
     $("#sKeyClear") && ($("#sKeyClear").onclick = () => run("Removing key…", async () => { state.settings = await api("PUT", "/api/settings", { clearKey: true }); delete state.modelCache[state.settings.provider]; }));
     $("#sHostSave") && ($("#sHostSave").onclick = () => { const ollamaHost = $("#sHost").value; run("Saving host…", async () => { state.settings = await api("PUT", "/api/settings", { ollamaHost }); delete state.modelCache.ollama; await loadModels("ollama", true); }); });
@@ -1086,7 +1102,7 @@ function bind() {
     });
     if (!state.guard) api("GET", "/api/guard").then((g) => { state.guard = g; if (state.sel === "settings") render(true); });
     if (state.guard) {
-      $("#guardOn").onchange = () => run(null, async () => { const r = await api("PUT", "/api/guard", { enabled: $("#guardOn").checked }); state.guard = { ...state.guard, ...r }; });
+      $("#guardOn") && ($("#guardOn").onchange = () => run(null, async () => { const r = await api("PUT", "/api/guard", { enabled: $("#guardOn").checked }); state.guard = { ...state.guard, ...r }; }));
       document.querySelectorAll("[data-guard-provider]").forEach((b) => b.onclick = () => run(null, async () => {
         const p = b.dataset.guardProvider;
         const r = await api("PUT", "/api/guard", p === "auto" ? { provider: null, model: null } : { provider: p, model: state.guard.settings.provider === p ? state.guard.settings.model : "" });

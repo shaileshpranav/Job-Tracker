@@ -7,6 +7,7 @@ import path from "node:path";
 import { db, touch, APPS_DIR, ROOT, type Application } from "./db.ts";
 import { compilePdf, compileTex, latexAvailable, markdownToTex, contentHash } from "./latex.ts";
 import { loadResume } from "./profile.ts";
+import { pdfFileName } from "./filenames.ts";
 
 let latexReady = false;
 export const isLatexReady = () => latexReady;
@@ -19,14 +20,16 @@ export async function letterHeader(resumeKey?: string | null) {
 
 /** Compile a document to PDF, cache it next to the Markdown, record the page count. */
 export async function buildPdf(docId: number) {
-  const doc = db.prepare("SELECT d.*, a.folder FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(docId) as any;
+  const doc = db.prepare("SELECT d.*, a.folder, a.company, a.resume_key FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(docId) as any;
   if (!doc) throw new Error("Document not found");
   const hash = contentHash(doc.tex ?? doc.content);
-  const pdfPath = path.join(APPS_DIR, doc.folder, doc.kind === "resume" ? "resume.pdf" : "cover-letter.pdf");
+  // Named for the recruiter (see filenames.ts); a stale file under an older name is removed on rebuild.
+  const pdfPath = path.join(APPS_DIR, doc.folder, pdfFileName(doc, doc.kind));
   if (doc.pdf_hash === hash && fs.existsSync(pdfPath)) return { pdf: fs.readFileSync(pdfPath), pages: doc.pages as number };
-  const app = db.prepare("SELECT resume_key FROM applications WHERE id = ?").get(doc.application_id) as { resume_key: string | null } | undefined;
-  const r = doc.tex ? await compileTex(doc.tex) : await compilePdf(doc.content, doc.kind, doc.kind === "cover_letter" ? await letterHeader(app?.resume_key) : undefined);
+  const r = doc.tex ? await compileTex(doc.tex) : await compilePdf(doc.content, doc.kind, doc.kind === "cover_letter" ? await letterHeader(doc.resume_key) : undefined);
   fs.writeFileSync(path.join(APPS_DIR, doc.folder, doc.kind === "resume" ? "resume.tex" : "cover-letter.tex"), r.tex);
+  const old = doc.pdf ? path.join(ROOT, doc.pdf) : null;
+  if (old && old !== pdfPath && fs.existsSync(old)) fs.rmSync(old, { force: true });
   fs.writeFileSync(pdfPath, r.pdf);
   db.prepare("UPDATE documents SET pages = ?, pdf = ?, pdf_hash = ? WHERE id = ?").run(r.pages, path.relative(ROOT, pdfPath), hash, doc.id);
   return { pdf: r.pdf, pages: r.pages };

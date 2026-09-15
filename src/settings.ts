@@ -93,6 +93,7 @@ export function llmSettings() {
     tasks,
     taskNames: TASKS,
     ollamaHost: (get("ollamaHost") ?? process.env.OLLAMA_HOST ?? "http://localhost:11434").replace(/\/$/, ""),
+    pdfName: pdfNamePattern(),
     keys: {
       anthropic: mask(apiKey("anthropic")),
       openrouter: mask(apiKey("openrouter")),
@@ -104,7 +105,10 @@ export function llmSettings() {
   };
 }
 
-export function saveLlmSettings(input: { provider?: string; model?: string; apiKey?: string; clearKey?: boolean; ollamaHost?: string }) {
+/** Pattern for exported PDF names; empty = the built-in default ("{name}-{kind}"). */
+export function pdfNamePattern(): string { return get("pdfName") ?? ""; }
+
+export function saveLlmSettings(input: { provider?: string; model?: string; apiKey?: string; clearKey?: boolean; ollamaHost?: string; pdfName?: string }) {
   if (input.provider) {
     if (!PROVIDERS.includes(input.provider as Provider)) throw new Error(`Unknown provider: ${input.provider}`);
     set("provider", input.provider);
@@ -118,6 +122,10 @@ export function saveLlmSettings(input: { provider?: string; model?: string; apiK
   if (input.ollamaHost !== undefined) {
     const h = input.ollamaHost.trim().replace(/\/$/, "");
     h ? set("ollamaHost", h) : del("ollamaHost");
+  }
+  if (input.pdfName !== undefined) {
+    const p = String(input.pdfName).trim().slice(0, 80);
+    p ? set("pdfName", p) : del("pdfName");
   }
   return llmSettings();
 }
