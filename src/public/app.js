@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {} };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null };
 
 // ---------- drafts: unsaved edits survive tab switches, background re-renders and reloads ----------
 // Any input/textarea with data-draft="key" is tracked: what you type is kept in state.drafts
@@ -57,6 +57,20 @@ function mdInline(t) {
   return esc(t).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*(?!\*)(.+?)\*/g, "$1<em>$2</em>")
     .replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\[([^\]]+)\]\(((?:https?:\/\/|mailto:)[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
+// Plain text for pasting into ATS text boxes: headings and emphasis markers dropped, bullets kept.
+function mdToText(md) {
+  return String(md ?? "").replace(/\r/g, "")
+    .replace(/^#{1,6}\s+(.*)$/gm, "$1")
+    .replace(/^[ \t]*[-*+][ \t]+/gm, "- ").replace(/^[ \t]*(\d+)[.)][ \t]+/gm, "$1. ")
+    .replace(/\*\*(.+?)\*\*/g, "$1").replace(/__(.+?)__/g, "$1")
+    .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, "$1$2").replace(/(^|[^_\w])_(?!\s)(.+?)_(?!\w)/g, "$1$2")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$/gm, "")
+    .replace(/\\([\\`*_{}\[\]()#+\-.!])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n").trim() + "\n";
+}
+const answersText = (a) => a.questions.map((q) => `${q.question}\n\n${q.answer}`).join("\n\n---\n\n");
 function mdToHtml(md) {
   const out = []; let list = null, para = [];
   const flush = () => { if (para.length) { out.push(`<p>${mdInline(para.join(" "))}</p>`); para = []; } };
@@ -100,7 +114,7 @@ function fmtTime(s, withDate = true) {
 async function api(method, url, body) {
   const res = await fetch(url, { method, headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) { const err = new Error(data.error || res.statusText); err.status = res.status; err.data = data; throw err; }
   return data;
 }
 
@@ -125,14 +139,23 @@ const needOf = (j) => { try { return JSON.parse(j.need || "{}"); } catch { retur
 
 // POST to an endpoint that enqueues a job; shows a notice instead of blocking.
 async function enqueue(url, body, label) {
-  state.err = null;
+  state.err = null; state.dup = null;
   try {
-    const { job } = await api("POST", url, body);
+    const r = await api("POST", url, body);
+    if (!r.job && r.application_id) { // nothing to queue — it already exists
+      if (state.sel === "feed") await loadFeed();
+      notify(r.existing ? `Already tracked as ${r.existing.company} · ${r.existing.role} — opening it` : "Already tracked — opening it");
+      return open(r.application_id);
+    }
+    const { job } = r;
     await refreshJobs();
     const position = activeJobs().filter((j) => j.status === "queued" && j.id < job.id).length;
     notify(`${job.label} — ${job.status === "running" ? "started" : position ? `queued (${position} ahead)` : "queued"}`);
-  } catch (e) { state.err = e.message; }
-  render();
+  } catch (e) {
+    if (e.data?.existing) { state.dup = { existing: e.data.existing, url, body }; state.sel = "new"; state.app = null; } // let the person decide
+    else state.err = e.message;
+  }
+  render(true);
 }
 
 // Clipboard API first; the old execCommand path covers browsers/embeds that refuse it.
@@ -701,7 +724,10 @@ function renderHome() {
 }
 
 function renderNew() {
-  return `${busy()}${errBox()}
+  const d = state.dup;
+  const dupBox = d ? `<div class="banner dup"><div><b>Already tracked:</b> ${esc(d.existing.company)} · ${esc(d.existing.role)} <span class="pill ${esc(d.existing.status)}">${esc(d.existing.status)}</span> <span class="muted">${d.existing.applied_at ? `applied ${d.existing.applied_at}` : `captured ${esc(String(d.existing.created_at).slice(0, 10))}`}</span></div>
+    <div class="toolbar" style="margin:0"><button class="primary" data-open-app="${d.existing.id}">Open it</button><button id="dupForce" title="Create a second application for the same posting anyway">Capture anyway</button><button class="ghost" id="dupDismiss">Dismiss</button></div></div>` : "";
+  return `${busy()}${errBox()}${dupBox}
     <div class="card"><h2>New application</h2>
       <div class="field"><label>Job posting URL</label><input id="nUrl" placeholder="https://…" autofocus data-draft="new:0:url"></div>
       <details ${hasDraft("new:0:desc") || hasDraft("new:0:company") || hasDraft("new:0:role") ? "open" : ""}><summary class="muted">Or paste the description (for pages that block scraping)</summary>
@@ -851,6 +877,13 @@ function renderDoc(a, kind) {
          <textarea class="doc" id="texText" spellcheck="false" style="min-height:480px" data-draft="${texKey}">${esc(state.tex.tex)}</textarea>
          <div class="toolbar" style="margin-top:8px"><button class="primary" id="texSave">Save & rebuild PDF</button>${state.tex.custom ? `<button id="texReset">Reset to generated</button>` : ""}<button class="ghost" data-discard="${texKey}" data-dirty-for="${texKey}" hidden>Discard edits</button><span class="pill warn" data-dirty-for="${texKey}" hidden>unsaved</span><div class="sp"></div><span class="muted" id="texResult"></span></div>`
       : `<p class="muted"><span class="spinner"></span>Loading LaTeX…</p>`;
+    else if (mode === "pdf") {
+      // The real compiled page, fetched as a blob so build errors can be shown instead of a broken frame.
+      const key = `${doc.id}:${doc.hash}`, cur = state.pdf;
+      if (!cur || cur.key !== key) { loadPdf(a, doc, key); body = `<p class="muted"><span class="spinner"></span>${doc.pdf_current ? "Loading the PDF…" : "Compiling the PDF…"}</p>`; }
+      else if (cur.error) body = `<div class="errbar"><span>✗ The PDF didn't build: ${esc(cur.error)}</span></div><p class="muted">Fix it in LaTeX mode (or the Markdown), then come back here.</p>`;
+      else body = `<iframe class="pdf-frame" src="${cur.url}#toolbar=0&navpanes=0&view=FitH" title="${label} PDF"></iframe>`;
+    }
     else if (mode === "diff") {
       const options = [...(kind === "resume" ? [["base", "Base resume (profile/resume.md)"]] : []), ...docs.slice(1).map((d, i) => [String(d.id), `v${docs.length - 1 - i} · ${fmtTime(d.created_at)}`])];
       const sel = options.some(([v]) => v === state.diffAgainst) ? state.diffAgainst : options[0]?.[0];
@@ -860,7 +893,7 @@ function renderDoc(a, kind) {
     }
     else body = `<div class="preview ${kind}">${mdToHtml(doc.content)}</div>`;
   } else body = `<p class="muted">No ${label} yet. Generation uses <code>profile/resume.md</code> + this job's description${kind === "resume" ? ", and is constrained to one page" : ""}.</p>`;
-  const modes = [["preview", "Preview"], ["edit", "Edit"], ...(a.latex ? [["tex", "LaTeX"]] : []), ["diff", "Compare"]];
+  const modes = [["preview", "Preview"], ...(a.latex ? [["pdf", "PDF"]] : []), ["edit", "Edit"], ...(a.latex ? [["tex", "LaTeX"]] : []), ["diff", "Compare"]];
   const ats = kind === "resume" ? renderAts(a, doc) : "";
   // Free-text steering for the next draft; prefilled with what produced the current version.
   const noteKey = `${a.id}:${kind}`, note = state.genNote[noteKey] ?? doc?.instructions ?? "";
@@ -879,6 +912,7 @@ function renderDoc(a, kind) {
       <div class="doc-group"><span>View</span><div><div class="seg">${modes.map(([m, n]) => `<button data-docmode="${m}" class="${mode === m ? "on" : ""}">${n}</button>`).join("")}</div></div></div>
       <div class="doc-group"><span>Export</span><div>
         ${a.latex ? `<a href="/doc/${doc.id}.pdf" target="_blank"><button class="primary">⬇ PDF</button></a><a href="/doc/${doc.id}" target="_blank"><button class="ghost" title="Browser print fallback">Print</button></a>` : `<a href="/doc/${doc.id}" target="_blank"><button class="primary">Print / Save as PDF</button></a>`}
+        <button data-copy-text="${doc.id}" title="Copy as plain text — for application forms that want the ${label} pasted in">⎘ Copy text</button>
       </div></div>
       </div>` : ""}
     </div>
@@ -913,6 +947,20 @@ function renderAts(a, doc) {
       </div>` : ""}
   </details>`;
 }
+async function loadPdf(a, doc, key) {
+  if (loadPdf.inflight === key) return;
+  loadPdf.inflight = key;
+  try {
+    const res = await fetch(`/doc/${doc.id}.pdf`, { cache: "no-store" });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const blob = await res.blob();
+    if (state.pdf?.url) URL.revokeObjectURL(state.pdf.url);
+    state.pdf = { key, url: URL.createObjectURL(blob) };
+    if (!doc.pdf_current && state.app?.id === a.id) state.app = await api("GET", `/api/applications/${a.id}`); // page count is known now
+  } catch (e) { state.pdf = { key, error: e.message }; }
+  finally { loadPdf.inflight = null; }
+  if (state.app?.id === a.id && state.docMode === "pdf") render(true);
+}
 async function loadAts(a, doc) {
   const docId = doc?.id ?? "base";
   if (loadAts.inflight === `${a.id}:${docId}`) return;
@@ -927,7 +975,7 @@ function renderQuestions(a) {
   return `<div class="card">
     <h3>Paste application questions (one per line)</h3>
     <textarea id="qIn" data-draft="qin:${a.id}:x" placeholder="Why do you want to work at ${esc(a.company)}?\nDescribe a project you're proud of.">${found && !a.questions.length ? esc(found.detail) : ""}</textarea>
-    <div class="toolbar" style="margin-top:8px"><button class="primary" id="answerBtn">Draft answers</button><span class="muted">Reuses your answers from other applications where they fit.</span></div>
+    <div class="toolbar" style="margin-top:8px"><button class="primary" id="answerBtn">Draft answers</button><span class="muted">Reuses your answers from other applications where they fit.</span><div class="sp"></div>${a.questions.length > 1 ? `<button id="copyAllAns" title="Every question and answer as plain text">⎘ Copy all answers</button>` : ""}</div>
   </div>
   ${a.questions.map((q) => `<div class="qa" data-q="${q.id}">
     <h4>${esc(q.question)}</h4>
@@ -957,7 +1005,7 @@ const errBox = () => state.err ? `<div class="errbar"><span>✗ ${esc(state.err)
 
 // Switch main view. Views that load data do so lazily and re-render when it lands.
 function go(view) {
-  state.app = null; state.err = null;
+  state.app = null; state.err = null; state.dup = null;
   if (view === "apps") { state.sel = null; render(true); return; }
   if (view === "home") { state.sel = isPhone() ? "home" : null; state.activity = null; api("GET", "/api/activity").then((a) => { state.activity = a; render(); }).catch(() => { state.activity = []; render(); }); }
   else state.sel = view;
@@ -1127,11 +1175,13 @@ function bind() {
     $("#bank").innerHTML = rows.map((q) => `<div class="qa"><h4>${esc(q.question)}</h4><div class="muted" style="margin-bottom:6px">${esc(q.company)} · ${esc(q.role)}</div><div style="white-space:pre-wrap">${esc(q.answer)}</div></div>`).join("") || '<p class="muted">Nothing yet.</p>';
   }, 250));
 
-  $("#cancelNew") && ($("#cancelNew").onclick = () => { clearDrafts("new:"); state.sel = null; render(true); });
+  $("#cancelNew") && ($("#cancelNew").onclick = () => { clearDrafts("new:"); state.dup = null; state.sel = null; render(true); });
+  $("#dupDismiss") && ($("#dupDismiss").onclick = () => { state.dup = null; render(true); });
+  $("#dupForce") && ($("#dupForce").onclick = () => { const d = state.dup; state.dup = null; enqueue(d.url, { ...d.body, force: true }).then(() => { if (!state.err) { clearDrafts("new:"); render(true); } }); });
   $("#captureBtn") && ($("#captureBtn").onclick = () => {
     const body = { url: $("#nUrl").value.trim(), company: $("#nCompany").value.trim(), role: $("#nRole").value.trim(), description: $("#nDesc").value.trim() };
     if (!body.url && !body.description) { state.err = "Paste a job posting URL, or open the section below and paste the description."; render(); return; }
-    enqueue("/api/applications", body).then(() => { if (!state.err) { clearDrafts("new:"); for (const id of ["#nUrl", "#nCompany", "#nRole", "#nDesc"]) $(id) && ($(id).value = ""); render(true); } });
+    enqueue("/api/applications", body).then(() => { if (!state.err && !state.dup) { clearDrafts("new:"); for (const id of ["#nUrl", "#nCompany", "#nRole", "#nDesc"]) $(id) && ($(id).value = ""); render(true); } });
   });
 
   const a = state.app;
@@ -1210,10 +1260,8 @@ function bind() {
   // Apply panel
   $("#applyBtn") && ($("#applyBtn").onclick = () => { state.applyOpen = !state.applyOpen; render(true); });
   $("#applyClose") && ($("#applyClose").onclick = () => { state.applyOpen = false; render(true); });
-  $("#applyCopyAns") && ($("#applyCopyAns").onclick = () => {
-    const text = a.questions.map((q) => `${q.question}\n\n${q.answer}`).join("\n\n---\n\n");
-    copyText(text).then((ok) => { if (!ok) return notify("✗ The browser blocked the clipboard — use the Copy buttons on the Questions tab"); $("#applyCopyAns").textContent = `Copied ${a.questions.length} ✓`; setTimeout(() => { const b = $("#applyCopyAns"); if (b) b.textContent = "⎘ Copy all answers"; }, 1500); });
-  });
+  for (const id of ["#applyCopyAns", "#copyAllAns"]) $(id) && ($(id).onclick = () => copyText(answersText(a)).then((ok) => { if (!ok) return notify("✗ The browser blocked the clipboard — use the Copy buttons on the Questions tab"); $(id).textContent = `Copied ${a.questions.length} ✓`; setTimeout(() => { const b = $(id); if (b) b.textContent = "⎘ Copy all answers"; }, 1500); }));
+  document.querySelectorAll("[data-copy-text]").forEach((b) => b.onclick = () => { const doc = a.documents.find((d) => d.id === Number(b.dataset.copyText)); copyText(mdToText(doc.content)).then((ok) => { b.textContent = ok ? "Copied ✓" : "Blocked"; setTimeout(() => (b.textContent = "⎘ Copy text"), 1500); }); });
   $("#applyReveal") && ($("#applyReveal").onclick = () => run("Preparing the files…", async () => { const r = await api("POST", `/api/applications/${a.id}/reveal`, {}); if (!r.ok) notify(`Files are in ${r.path}`); }));
   $("#applyMark") && ($("#applyMark").onclick = () => {
     const body = { status: "applied", applied_at: $("#applyDate").value || localDate() };

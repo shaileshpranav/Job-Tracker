@@ -20,6 +20,8 @@ import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCook
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf } from "./jobs.ts";
 import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
+import { preflight } from "./preflight.ts";
+import { canonicalUrl } from "./scrape.ts";
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? "0.0.0.0"; // reachable from your phone on the same Wi-Fi; set HOST=127.0.0.1 to keep it local-only
@@ -46,12 +48,20 @@ function appDetail(app: Application) {
     has_source_text: Boolean(source_text?.trim()),
     requirements: app.requirements ? JSON.parse(app.requirements) : [],
     documents: (db.prepare("SELECT id, kind, file, created_at, content, pages, pdf_hash, instructions, tex IS NOT NULL AS custom_tex, original IS NOT NULL AND original != content AS edited FROM documents WHERE application_id = ? ORDER BY id DESC").all(app.id) as any[])
-      .map(({ pdf_hash, ...d }) => ({ ...d, custom_tex: Boolean(d.custom_tex), edited: Boolean(d.edited), size: resumeSize(d.content), pdf_current: pdf_hash === contentHash(d.custom_tex ? (db.prepare("SELECT tex FROM documents WHERE id = ?").get(d.id) as any).tex : d.content) })),
+      .map(({ pdf_hash, ...d }) => { const hash = contentHash(d.custom_tex ? (db.prepare("SELECT tex FROM documents WHERE id = ?").get(d.id) as any).tex : d.content); return { ...d, custom_tex: Boolean(d.custom_tex), edited: Boolean(d.edited), size: resumeSize(d.content), pdf_current: pdf_hash === hash, hash: hash.slice(0, 10) }; }),
     one_page: ONE_PAGE,
     latex: isLatexReady(),
     questions: db.prepare("SELECT * FROM questions WHERE application_id = ? ORDER BY id").all(app.id),
     events: db.prepare("SELECT * FROM events WHERE application_id = ? ORDER BY id DESC").all(app.id),
   };
+}
+
+/** An application that already covers this posting — same canonical URL, or the same company + role when those are given. */
+function findDuplicate(url?: string | null, company?: string | null, role?: string | null) {
+  const rows = db.prepare("SELECT id, company, role, status, url, applied_at, created_at FROM applications ORDER BY id DESC").all() as Pick<Application, "id" | "company" | "role" | "status" | "url" | "applied_at" | "created_at">[];
+  const want = url?.trim() ? canonicalUrl(url) : null;
+  const key = company?.trim() && role?.trim() ? `${company.trim().toLowerCase()}|${role.trim().toLowerCase()}` : null;
+  return rows.find((a) => (want && a.url && canonicalUrl(a.url) === want) || (key && `${a.company.toLowerCase()}|${a.role.toLowerCase()}` === key)) ?? null;
 }
 
 // ---------- routes ----------
@@ -166,7 +176,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
 
   // profile
   if (m("GET", /^\/api\/profile$/)) return send(res, 200, profileStatus());
-  if (m("POST", /^\/api\/profile\/import$/)) { const { key = DEFAULT_KEY } = await readJson(req); return send(res, 202, { job: enqueue("import", `Import resume${key === DEFAULT_KEY ? "" : ` (${key})`}`, { key }) }); }
+  if (m("POST", /^\/api\/profile\/import$/)) { const { key = DEFAULT_KEY } = await readJson(req); await preflight("import"); return send(res, 202, { job: enqueue("import", `Import resume${key === DEFAULT_KEY ? "" : ` (${key})`}`, { key }) }); }
   if (m("GET", /^\/api\/profile\/resume$/)) {
     const key = url.searchParams.get("key") || DEFAULT_KEY;
     if (!listResumes().some((r) => r.key === key && r.hasMarkdown)) throw new HttpError(404, "No such base resume yet — import one first");
@@ -216,8 +226,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if (m("POST", /^\/api\/applications$/)) {
     const body = await readJson(req);
     if (!body.url && !body.description) throw new HttpError(400, "Provide a url or a description");
+    // Same posting again? Say so instead of quietly making a second application (the client can force it).
+    const dup = body.force ? null : findDuplicate(body.url, body.company, body.role);
+    if (dup) return send(res, 409, { error: `You already track this posting: ${dup.company} · ${dup.role} (${dup.status}${dup.applied_at ? `, applied ${dup.applied_at}` : `, captured ${dup.created_at.slice(0, 10)}`}).`, existing: dup });
+    await preflight("capture", "fit");
     const label = body.company || body.title ? `Capture — ${body.company || body.title}` : `Capture — ${body.url}`;
-    return send(res, 202, { job: enqueue("capture", label.slice(0, 80), body) });
+    const { force: _force, ...payload } = body;
+    return send(res, 202, { job: enqueue("capture", label.slice(0, 80), payload) });
   }
   if ((r = m("GET", /^\/api\/applications\/(\d+)$/))) return send(res, 200, appDetail(mustApp(r[1])));
   if ((r = m("PATCH", /^\/api\/applications\/(\d+)$/))) {
@@ -291,11 +306,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/translate$/))) {
     const app = mustApp(r[1]);
+    await preflight("translate");
     return send(res, 202, { job: enqueue("translate", `Translate — ${app.company}`, {}, app.id) });
   }
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/prep$/))) {
     const app = mustApp(r[1]);
     if (!hasAnyResume()) throw new HttpError(400, "Import your resume first");
+    await preflight("prep");
     return send(res, 202, { job: enqueue("prep", `Interview prep — ${app.company}`, {}, app.id) });
   }
 
@@ -321,18 +338,20 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     if (action === "dismiss_screened") { const n = Number(db.prepare("UPDATE feed_items SET status = 'dismissed' WHERE status = 'new' AND fit_score IS NULL AND ats_pct IS NOT NULL AND ats_pct < ?").run(s.minAts).changes); return send(res, 200, { ok: true, n }); }
     if (action === "track_hot") {
       const hot = db.prepare("SELECT * FROM feed_items WHERE status = 'new' AND fit_score >= ? ORDER BY fit_score DESC, ats_pct DESC LIMIT 20").all(s.minScore) as any[];
+      if (hot.length) await preflight("capture", "fit");
       for (const it of hot) enqueue("capture", `Capture — ${it.company}`, it.description?.trim() ? { url: it.url, company: it.company, role: it.title, title: `${it.title} — ${it.company}`, description: `${it.location ? `Location: ${it.location}\n` : ""}${it.salary ? `Salary: ${it.salary}\n` : ""}\n${it.description}`, feed_item_id: it.id } : { url: it.url, feed_item_id: it.id });
       return send(res, 200, { ok: true, n: hot.length });
     }
     throw new HttpError(400, "Unknown bulk action");
   }
   if (m("PUT", /^\/api\/feed\/settings$/)) { saveFeedSettings(await readJson(req)); return send(res, 200, { settings: feedSettings(), counts: feedCounts() }); }
-  if (m("POST", /^\/api\/feed\/refresh$/)) return send(res, 202, { job: enqueue("feed_refresh", "Refresh job feed", {}) });
+  if (m("POST", /^\/api\/feed\/refresh$/)) { await preflight("feed"); return send(res, 202, { job: enqueue("feed_refresh", "Refresh job feed", {}) }); }
   if (m("POST", /^\/api\/feed\/score$/)) {
     const body = await readJson(req);
     const ids: number[] = Array.isArray(body.ids) && body.ids.length ? body.ids.map(Number) : unscoredIds(feedSettings().scorePerRefresh);
     if (!ids.length) throw new HttpError(400, "Nothing to score");
     if (!hasAnyResume()) throw new HttpError(400, "Import your resume first");
+    await preflight("feed");
     return send(res, 202, { job: enqueue("feed_score", `Score ${ids.length} feed posting${ids.length === 1 ? "" : "s"}`, { ids }) });
   }
   if (m("POST", /^\/api\/feed\/test$/)) {
@@ -349,6 +368,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     if (r[2] === "delete") { db.prepare("DELETE FROM feed_items WHERE id = ?").run(it.id); return send(res, 200, { ok: true }); }
     if (r[2] === "restore") { db.prepare("UPDATE feed_items SET status = 'new' WHERE id = ?").run(it.id); return send(res, 200, { ok: true }); }
     if (it.status === "tracked" && it.application_id) return send(res, 200, { application_id: it.application_id });
+    const dup = findDuplicate(it.url, it.company, it.title_en || it.title);
+    if (dup) { // captured by hand earlier — just link the feed item to it
+      db.prepare("UPDATE feed_items SET status = 'tracked', application_id = ? WHERE id = ?").run(dup.id, it.id);
+      return send(res, 200, { application_id: dup.id, existing: dup });
+    }
+    await preflight("capture", "fit");
     const body = it.description?.trim()
       ? { url: it.url, company: it.company, role: it.title_en || it.title, title: `${it.title_en || it.title} — ${it.company}`, description: `${it.location ? `Location: ${it.location}\n` : ""}${it.salary ? `Salary: ${it.salary}\n` : ""}\n${it.description}`, feed_item_id: it.id }
       : { url: it.url, feed_item_id: it.id }; // no text from the API → fetch the page
@@ -379,11 +404,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const app = mustApp(r[1]);
     const { source = "description" } = await readJson(req);
     if (source === "url" && !app.url) throw new HttpError(400, "This application has no posting URL");
+    await preflight("capture");
     return send(res, 202, { job: enqueue("reextract", `${source === "url" ? "Fetch again" : "Re-extract"} — ${app.company}`, { source }, app.id) });
   }
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/fit$/))) {
     const app = mustApp(r[1]);
     if (!hasAnyResume()) throw new HttpError(400, "Import your resume first");
+    await preflight("fit");
     return send(res, 202, { job: enqueue("fit", `Fit score — ${app.company}`, {}, app.id) });
   }
   if ((r = m("POST", /^\/api\/applications\/(\d+)\/generate$/))) {
@@ -395,6 +422,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const emphasize = Array.isArray(body.emphasize) ? body.emphasize.map(String).slice(0, 25) : [];
     const instructions = String(body.instructions ?? "").trim().slice(0, 1000);
     const tag = emphasize.length ? " (ATS terms)" : instructions ? " (with your notes)" : "";
+    await preflight(...(what === "resume" ? ["resume" as const] : what === "cover_letter" ? ["cover_letter" as const] : ["resume" as const, "cover_letter" as const]));
     return send(res, 202, { job: enqueue("generate", `${names[what]}${tag} — ${app.company}`, { what, emphasize, instructions }, app.id) });
   }
   // Apply pack: make sure the current PDFs are on disk, then show the application folder in Finder.
@@ -460,12 +488,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(Number(r[1])) as any;
     if (!doc || doc.kind !== "resume") throw new HttpError(404, "Resume not found");
     const app = mustApp(String(doc.application_id));
+    await preflight("resume");
     return send(res, 202, { job: enqueue("condense", `Condense resume — ${app.company}`, { document_id: doc.id }, app.id) });
   }
   if ((r = m("POST", /^\/api\/documents\/(\d+)\/learn$/))) {
     const doc = db.prepare("SELECT d.*, a.company FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(Number(r[1])) as any;
     if (!doc) throw new HttpError(404, "Document not found");
     if (!doc.original || doc.original === doc.content) throw new HttpError(400, "No manual edits on this version yet — edit the Markdown, save, then learn.");
+    await preflight("learn");
     return send(res, 202, { job: enqueue("learn", `Learn ${doc.kind === "resume" ? "resume" : "cover letter"} format — ${doc.company}`, { document_id: doc.id }, doc.application_id) });
   }
   // learned formatting preferences
@@ -512,6 +542,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const { questions } = await readJson(req) as { questions: string[] };
     const qs = (questions ?? []).map((q) => q.trim()).filter(Boolean);
     if (!qs.length) throw new HttpError(400, "No questions");
+    await preflight("questions");
     return send(res, 202, { job: enqueue("questions", `Answers (${qs.length}) — ${app.company}`, { questions: qs }, app.id) });
   }
   if ((r = m("PUT", /^\/api\/questions\/(\d+)$/))) {
