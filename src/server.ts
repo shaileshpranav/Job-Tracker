@@ -17,6 +17,7 @@ import { HttpError, readJson, send } from "./http.ts";
 import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf } from "./jobs.ts";
+import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds } from "./feed.ts";
 
 const PORT = Number(process.env.PORT ?? 4321);
 const HOST = process.env.HOST ?? "0.0.0.0"; // reachable from your phone on the same Wi-Fi; set HOST=127.0.0.1 to keep it local-only
@@ -244,6 +245,40 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     return send(res, 202, { job: enqueue("prep", `Interview prep — ${app.company}`, {}, app.id) });
   }
 
+  // job feed
+  if (m("GET", /^\/api\/feed$/)) {
+    const status = url.searchParams.get("status");
+    return send(res, 200, { items: listFeed(status && status !== "open" ? status : null), settings: feedSettings(), lastRefresh: feedLastRefresh(), counts: feedCounts() });
+  }
+  if (m("PUT", /^\/api\/feed\/settings$/)) { saveFeedSettings(await readJson(req)); return send(res, 200, { settings: feedSettings(), counts: feedCounts() }); }
+  if (m("POST", /^\/api\/feed\/refresh$/)) return send(res, 202, { job: enqueue("feed_refresh", "Refresh job feed", {}) });
+  if (m("POST", /^\/api\/feed\/score$/)) {
+    const body = await readJson(req);
+    const ids: number[] = Array.isArray(body.ids) && body.ids.length ? body.ids.map(Number) : unscoredIds(feedSettings().scorePerRefresh);
+    if (!ids.length) throw new HttpError(400, "Nothing to score");
+    if (!fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) throw new HttpError(400, "Import your resume first");
+    return send(res, 202, { job: enqueue("feed_score", `Score ${ids.length} feed posting${ids.length === 1 ? "" : "s"}`, { ids }) });
+  }
+  if (m("POST", /^\/api\/feed\/test$/)) {
+    const { board } = await readJson(req);
+    const b = String(board ?? "").trim().toLowerCase().replace(/\s+/g, "");
+    if (!/^(greenhouse|lever|ashby|workable|smartrecruiters):[\w.-]+$/.test(b)) throw new HttpError(400, "Use provider:token, e.g. greenhouse:stripe");
+    try { const jobs = await fetchBoard(b); return send(res, 200, { ok: true, count: jobs.length, sample: jobs.slice(0, 3).map((j) => j.title) }); }
+    catch (e: any) { return send(res, 200, { ok: false, error: e.message }); }
+  }
+  if ((r = m("POST", /^\/api\/feed\/(\d+)\/(track|dismiss|restore)$/))) {
+    const it = getFeedItem(Number(r[1]));
+    if (!it) throw new HttpError(404, "Feed item not found");
+    if (r[2] === "dismiss") { db.prepare("UPDATE feed_items SET status = 'dismissed' WHERE id = ?").run(it.id); return send(res, 200, { ok: true }); }
+    if (r[2] === "restore") { db.prepare("UPDATE feed_items SET status = 'new' WHERE id = ?").run(it.id); return send(res, 200, { ok: true }); }
+    if (it.status === "tracked" && it.application_id) return send(res, 200, { application_id: it.application_id });
+    const body = it.description?.trim()
+      ? { url: it.url, company: it.company, role: it.title, title: `${it.title} — ${it.company}`, description: `${it.location ? `Location: ${it.location}\n` : ""}${it.salary ? `Salary: ${it.salary}\n` : ""}\n${it.description}`, feed_item_id: it.id }
+      : { url: it.url, feed_item_id: it.id }; // no text from the API → fetch the page
+    return send(res, 202, { job: enqueue("capture", `Capture — ${it.company}`, body) });
+  }
+  if (m("DELETE", /^\/api\/feed\/dismissed$/)) { db.prepare("DELETE FROM feed_items WHERE status = 'dismissed'").run(); return send(res, 200, { ok: true }); }
+
   // export / backup
   if (m("GET", /^\/api\/export\/applications\.csv$/)) {
     const rows = db.prepare("SELECT id, company, role, location, salary, status, applied_at, fit_score, url, next_action_at, next_action, followed_up_at, notes, created_at FROM applications ORDER BY id").all() as any[];
@@ -405,6 +440,13 @@ http.createServer(async (req, res) => {
     send(res, status, { error: msg });
   }
 }).listen(PORT, HOST, () => {
+  // Feed auto-refresh: check every 15 minutes whether the configured interval has elapsed.
+  setInterval(() => {
+    const h = feedSettings().autoHours;
+    if (!h) return;
+    const last = feedLastRefresh();
+    if (!last || Date.now() - Date.parse(last) >= h * 3_600_000) enqueue("feed_refresh", "Refresh job feed (auto)", {});
+  }, 15 * 60 * 1000).unref();
   console.log(`Job Tracker → http://localhost:${PORT}`);
   if (HOST === "0.0.0.0") {
     for (const ifs of Object.values(os.networkInterfaces())) {

@@ -6,7 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, type Application } from "./db.ts";
 import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
-import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, interviewPrep, type JobExtract } from "./ai.ts";
+import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, interviewPrep, quickFit, type JobExtract } from "./ai.ts";
+import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, isExcluded, insertNew, unscoredIds, getFeedItem, markFeedRefreshed, type Posting } from "./feed.ts";
 import { compilePdf } from "./latex.ts";
 import { registerJob, enqueue, NeedsYou } from "./queue.ts";
 import { loadResume, loadNotes } from "./profile.ts";
@@ -79,8 +80,67 @@ registerJob("capture", async (body, _job, progress) => {
     if (body.role) job.role = body.role;
   } else throw new Error("Provide a url or a description");
   const app = createApplication(job, body.url?.trim() || null, sourceText);
+  if (body.feed_item_id) db.prepare("UPDATE feed_items SET status = 'tracked', application_id = ? WHERE id = ?").run(app.id, Number(body.feed_item_id));
   fitInBackground(app.id);
   return { application_id: app.id, company: app.company, role: app.role };
+});
+
+// ---------- job feed ----------
+
+/** Small models sometimes pad structured fields with junk; keep one clean sentence. */
+const cleanReason = (r: string) => String(r ?? "").replace(/\s+/g, " ").replace(/(\b\S+\b)(?:\s+\1\b){3,}/g, "$1").trim().slice(0, 240);
+
+registerJob("feed_refresh", async (_p, _job, progress) => {
+  const s = feedSettings();
+  const sources = [...s.boards.map((b) => ({ name: b, run: () => fetchBoard(b) })), ...(["arbeitnow", "remoteok", "remotive"] as const).filter((a) => s.aggregators[a]).map((a) => ({ name: a, run: () => fetchAggregator(a, s.keywords) }))];
+  if (!sources.length) throw new Error("No sources configured — add company boards or enable an aggregator in the feed settings");
+  const report: Record<string, string> = {};
+  const kept: Posting[] = [];
+  for (const [i, src] of sources.entries()) {
+    progress(`Fetching ${src.name} (${i + 1}/${sources.length})…`);
+    try {
+      const all = await src.run();
+      const matched = all.filter((p) => p.url && p.title && matchesKeywords(p.title, s.keywords) && matchesLocation(p, s.locations) && !isExcluded(p, s.exclude));
+      kept.push(...matched);
+      report[src.name] = `${matched.length} of ${all.length} matched`;
+    } catch (e: any) {
+      report[src.name] = `failed: ${e.message}`;
+    }
+  }
+  const added = insertNew(kept);
+  markFeedRefreshed();
+  // Triage the newest unscored ones, up to the cap.
+  const ids = unscoredIds(s.scorePerRefresh);
+  let scored = 0, hot = 0;
+  if (ids.length && fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) {
+    const resume = await loadResume(), notes = loadNotes();
+    for (const [i, id] of ids.entries()) {
+      progress(`Scoring ${i + 1}/${ids.length}…`);
+      const it = getFeedItem(id);
+      try {
+        const r = await quickFit(resume, notes, it);
+        db.prepare("UPDATE feed_items SET fit_score = ?, fit_reason = ? WHERE id = ?").run(r.score, cleanReason(r.reason), id);
+        scored++; if (r.score >= s.minScore) hot++;
+      } catch (e: any) {
+        db.prepare("UPDATE feed_items SET fit_reason = ? WHERE id = ?").run(`scoring failed: ${e.message}`.slice(0, 300), id);
+      }
+    }
+  }
+  return { added, scored, hot, report };
+});
+
+registerJob("feed_score", async ({ ids }, _job, progress) => {
+  const s = feedSettings();
+  const resume = await loadResume(), notes = loadNotes();
+  let hot = 0;
+  for (const [i, id] of (ids as number[]).entries()) {
+    const it = getFeedItem(id); if (!it) continue;
+    progress(`Scoring ${it.company} — ${it.title} (${i + 1}/${ids.length})…`);
+    const r = await quickFit(resume, notes, it);
+    db.prepare("UPDATE feed_items SET fit_score = ?, fit_reason = ? WHERE id = ?").run(r.score, cleanReason(r.reason), id);
+    if (r.score >= s.minScore) hot++;
+  }
+  return { scored: ids.length, hot };
 });
 
 registerJob("reextract", async ({ source = "description", verified_text }, job, progress) => {

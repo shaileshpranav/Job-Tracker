@@ -3,12 +3,15 @@ import path from "node:path";
 import fs from "node:fs";
 
 export const ROOT = path.resolve(import.meta.dirname, "..");
-export const DATA_DIR = path.join(ROOT, "data");
-export const APPS_DIR = path.join(ROOT, "applications");
-export const PROFILE_DIR = path.join(ROOT, "profile");
+// Overridable so a second instance (tests, a trial run) can keep its own data.
+const dir = (env: string, fallback: string) => (process.env[env] ? path.resolve(process.env[env]!) : path.join(ROOT, fallback));
+export const DATA_DIR = dir("DATA_DIR", "data");
+export const APPS_DIR = dir("APPLICATIONS_DIR", "applications");
+export const PROFILE_DIR = dir("PROFILE_DIR", "profile");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(APPS_DIR, { recursive: true });
+fs.mkdirSync(PROFILE_DIR, { recursive: true });
 
 export const db = new DatabaseSync(path.join(DATA_DIR, "tracker.db"));
 db.exec("PRAGMA journal_mode = WAL");
