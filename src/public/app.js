@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
@@ -84,7 +84,7 @@ async function enqueue(url, body, label) {
   render();
 }
 
-function notify(text) { state.notice = text; render(); clearTimeout(notify.t); notify.t = setTimeout(() => { state.notice = null; render(); }, 3500); }
+function notify(text) { state.notice = text; render(true); clearTimeout(notify.t); notify.t = setTimeout(() => { state.notice = null; render(true); }, 3500); }
 
 async function refreshJobs() {
   const prev = new Map(state.jobs.map((j) => [j.id, j.status]));
@@ -322,8 +322,8 @@ function celebrate(c) {
   for (const h of c.hits) msgs.push(`🎯 ${h === "Today" ? "Daily" : h === "This week" ? "Weekly" : "Monthly"} goal hit!`);
   for (const a of c.unlocked) msgs.push(`${a.icon} Achievement unlocked: ${a.name}`);
   if (!msgs.length) return;
-  state.notice = msgs.join("  ·  "); state.celebrate = true; render();
-  clearTimeout(notify.t); notify.t = setTimeout(() => { state.notice = null; state.celebrate = false; render(); }, 6000);
+  state.notice = msgs.join("  ·  "); state.celebrate = true; render(true);
+  clearTimeout(notify.t); notify.t = setTimeout(() => { state.notice = null; state.celebrate = false; render(true); }, 6000);
 }
 
 function renderTasks() {
@@ -346,31 +346,59 @@ function jobBadge(appId, types) {
 
 // ---------- data ----------
 async function loadList() { state.apps = await api("GET", "/api/applications"); }
-async function open(id) { state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = await api("GET", `/api/applications/${id}`); state.err = null; render(); }
+async function open(id) { state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = await api("GET", `/api/applications/${id}`); state.err = null; render(true); }
 
 async function refresh() { await loadList(); if (typeof state.sel === "number") state.app = await api("GET", `/api/applications/${state.sel}`); render(); }
 
 // ---------- render ----------
-function render() {
-  renderSidebar();
+let lastSig = "";
+function render(force = false) {
   const main = $("#main");
-  // On phones the list and the detail are separate screens; body.detail picks which.
+  const scrollTop = main.scrollTop;
+  renderSidebar(); bindSidebar();
   document.body.classList.toggle("detail", state.sel !== null);
   const back = `<button class="back" id="backBtn">← Applications</button>`;
   const notice = (state.notice ? `<div class="notice ${state.celebrate ? "celebrate" : ""}">${esc(state.notice)}</div>` : "") + renderNeedsYou();
-  if (state.sel === "tasks") main.innerHTML = back + notice + renderTasks();
-  else if (state.sel === "goals") main.innerHTML = back + notice + renderGoals();
-  else if (state.sel === "feed") main.innerHTML = back + notice + renderFeed();
-  else if (state.sel === "new") main.innerHTML = back + notice + renderNew();
-  else if (state.sel === "settings") main.innerHTML = back + notice + renderSettings();
-  else if (state.app) main.innerHTML = back + notice + renderDetail(state.app);
-  else if (state.sel === "home") main.innerHTML = back + notice + renderHome();
-  else main.innerHTML = notice + renderHome();
-  bind();
-  if (window.innerWidth <= 768) window.scrollTo(0, 0);
+  let html;
+  if (state.sel === "tasks") html = back + notice + renderTasks();
+  else if (state.sel === "goals") html = back + notice + renderGoals();
+  else if (state.sel === "feed") html = back + notice + renderFeed();
+  else if (state.sel === "new") html = back + notice + renderNew();
+  else if (state.sel === "settings") html = back + notice + renderSettings();
+  else if (state.app) html = back + notice + renderDetail(state.app);
+  else html = (state.sel === "home" ? back : "") + notice + renderHome();
+  // Background polls call render() often; only touch the DOM when the output changed,
+  // so scroll position and focus survive, and restore scroll when it did change.
+  const sig = html.length + ":" + html.slice(0, 4000) + html.slice(-4000);
+  if (force || sig !== lastSig) {
+    lastSig = sig;
+    main.innerHTML = html;
+    bind();
+    main.scrollTop = scrollTop;
+  }
+  const pill = $("#busyPill");
+  pill.hidden = !state.busy;
+  if (state.busy) pill.innerHTML = `<span class="spinner"></span>${esc(state.busy)}`;
+  if (window.innerWidth <= 768 && state.sel !== null) window.scrollTo(0, 0);
+}
+
+const NAV = [["home", "🏠", "Home"], ["feed", "📡", "Feed"], ["goals", "🎯", "Goals"], ["tasks", "⏱", "Tasks"], ["settings", "⚙", "Settings"]];
+const isPhone = () => window.innerWidth <= 768;
+function navHtml(mobile = false) {
+  const hot = state.feed?.counts?.hot ?? state.feedHot ?? 0, n = activeJobs().length, waiting = waitingJobs().length;
+  // On a phone the list is its own screen ("Apps") and Home is the dashboard.
+  const cur = mobile
+    ? (state.sel === null || typeof state.sel === "number" || state.sel === "new" ? "apps" : state.sel)
+    : (state.sel === null || state.sel === "home" || typeof state.sel === "number" || state.sel === "new" ? "home" : state.sel);
+  const items = mobile ? [["apps", "📋", "Apps"], ...NAV] : NAV;
+  return items.map(([k, ic, name]) => {
+    const badge = k === "feed" && hot ? `<span class="badge ok">${hot}</span>` : k === "tasks" && (n || waiting) ? `<span class="badge ${waiting ? "warn" : ""}">${n}</span>` : "";
+    return `<button data-nav="${k}" class="${cur === k ? "on" : ""}"><span>${ic}</span><span>${name}</span>${badge}</button>`;
+  }).join("");
 }
 
 function renderSidebar() {
+  $("#nav").innerHTML = navHtml(); $("#bottomnav").innerHTML = navHtml(true);
   const counts = { all: state.apps.length };
   for (const a of state.apps) counts[a.status] = (counts[a.status] || 0) + 1;
   const due = state.apps.filter((a) => a.due).length;
@@ -378,23 +406,21 @@ function renderSidebar() {
     .map((s) => `<button data-f="${s}" class="${state.filter === s ? "on" : ""}">${s} ${counts[s] || 0}</button>`).join("")
     + (due ? `<button data-f="due" class="due ${state.filter === "due" ? "on" : ""}">⏰ follow up ${due}</button>` : "");
   const q = state.search.trim().toLowerCase();
-  const rows = state.apps.filter((a) => (state.filter === "all" || (state.filter === "due" ? a.due : a.status === state.filter)) && (!q || `${a.company} ${a.role} ${a.location || ""}`.toLowerCase().includes(q)));
+  let rows = state.apps.filter((a) => (state.filter === "all" || (state.filter === "due" ? a.due : a.status === state.filter)) && (!q || `${a.company} ${a.role} ${a.location || ""}`.toLowerCase().includes(q)));
+  const by = { recent: (a, b) => b.updated_at.localeCompare(a.updated_at), fit: (a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0) || b.updated_at.localeCompare(a.updated_at), applied: (a, b) => (b.applied_at || "").localeCompare(a.applied_at || "") || b.updated_at.localeCompare(a.updated_at), company: (a, b) => a.company.localeCompare(b.company) };
+  rows = [...rows].sort(by[state.sort] || by.recent);
+  $("#sortSeg").innerHTML = [["recent", "Recent"], ["fit", "Fit"], ["applied", "Applied"], ["company", "A–Z"]].map(([k, n]) => `<button data-sort="${k}" class="${state.sort === k ? "on" : ""}">${n}</button>`).join("");
+  $("#listCount").textContent = `${rows.length} of ${state.apps.length}`;
   $("#list").innerHTML = rows.length ? rows.map((a) => `
-    <div class="row ${a.id === state.sel ? "sel" : ""}" data-id="${a.id}">
-      <b>${esc(a.company)}<span class="pill ${a.status}">${a.status}</span>${a.fit_score ? `<span class="pill fit f${a.fit_score}" title="Fit score">★ ${a.fit_score}</span>` : a.fit_status === "pending" ? `<span class="pill" title="Scoring fit…">★ …</span>` : ""}</b>
-      <span>${esc(a.role)}</span><br>
-      <small>${esc(a.location || "")}${a.applied_at ? ` · applied ${a.applied_at}` : ""}${a.due === "action" ? ` · <span class="due-txt">⏰ ${esc(a.next_action || "action due")}</span>` : a.due === "followup" ? ` · <span class="due-txt">⏰ ${a.days_since}d, follow up</span>` : ""}</small>
-    </div>`).join("") : `<div class="empty" style="padding:40px 0">${state.apps.length ? "No matches" : "No applications yet"}</div>`;
+    <div class="row ${a.status} ${a.id === state.sel ? "sel" : ""}" data-id="${a.id}">
+      <b>${esc(a.company)}${a.fit_score ? `<span class="pill fit f${a.fit_score}" title="Fit score">★ ${a.fit_score}</span>` : a.fit_status === "pending" ? `<span class="pill" title="Scoring fit…">★ …</span>` : ""}</b>
+      <span>${esc(a.role)}</span>
+      <div class="meta"><span class="pill ${a.status}">${a.status}</span><small>${esc(a.location || "")}${a.applied_at ? ` · ${a.applied_at}` : ""}</small>${a.due === "action" ? `<small class="due-txt">⏰ ${esc(a.next_action || "action due")}</small>` : a.due === "followup" ? `<small class="due-txt">⏰ ${a.days_since}d — follow up</small>` : ""}</div>
+    </div>`).join("") : `<div class="empty" style="padding:40px 16px">${state.apps.length ? "No matches" : "No applications yet.<br><small>Press <kbd>n</kbd> or use + New.</small>"}</div>`;
   const s = state.settings;
   $("#llmFootText").textContent = s ? `${s.provider} · ${s.model}` : "";
   $("#logoutBtn").hidden = !s?.auth?.enabled;
   $("#goalWidget").innerHTML = goalWidget();
-  const hot = state.feed?.counts?.hot ?? state.feedHot ?? 0;
-  $("#feedBtn").innerHTML = hot ? `📡 <b>${hot}</b>` : "📡";
-  $("#feedBtn").classList.toggle("active", hot > 0);
-  const n = activeJobs().length;
-  $("#tasksBtn").innerHTML = n ? `<span class="spinner"></span>${n}` : "⏱";
-  $("#tasksBtn").classList.toggle("active", n > 0);
 }
 
 const PROVIDER_HELP = {
@@ -522,36 +548,46 @@ function bindCombo(id, onPick) {
 }
 
 function renderHome() {
-  const p = state.profile;
-  const banner = p && !p.hasMarkdown
-    ? `<div class="banner">${p.hasSource
-        ? `Found ${p.files.filter((f) => /\.(pdf|docx)$/i.test(f)).join(", ")} in <code>profile/</code>. <button id="importBtn">Import resume</button> to build <code>resume.md</code> (one-time, uses Claude).`
-        : `No base resume yet. Drop <code>resume.pdf</code> or <code>resume.docx</code> into the <code>profile/</code> folder, then reload.`}</div>`
-    : "";
-  return `${busy()}${errBox()}${banner}
-    <div class="card"><h2>How it works</h2>
-      <ol>
-        <li><b>New</b> → paste a posting URL or its text (or use the bookmarklet below). The model extracts company, role, requirements and any application questions, then scores how well the role <b>fits</b> your base resume.</li>
-        <li><b>Generate</b> a one-page tailored resume and a cover letter. Preview, edit, or tweak the LaTeX, then <b>⬇ PDF</b>.</li>
-        <li><b>Questions</b> → paste the form's questions; answers are drafted from your profile and your previous answers.</li>
-        <li>Edit a document and hit <b>🎓 Learn my format</b> so future documents follow your formatting. Track <b>status</b> as things move; everything is mirrored to <code>applications/&lt;id-company-role&gt;/</code> as Markdown, TeX and PDF.</li>
-      </ol>
-      <p class="muted">Long-running actions queue as <b>⏱ Tasks</b> and run in the background. Models, keys and prompts live in <b>⚙ Settings</b>.</p>
-      ${p?.hasMarkdown ? `<p class="muted">Base resume: <code>profile/resume.md</code> ✓</p>` : ""}
+  const p = state.profile, st = state.settings, g = state.goals, f = state.feed;
+  const hot = f?.counts?.hot ?? state.feedHot ?? 0;
+  const due = state.apps.filter((a) => a.due);
+  const steps = [
+    { done: !!p?.hasMarkdown, name: "Import your base resume", hint: p?.hasSource ? `Found ${p.files.filter((x) => /\.(pdf|docx)$/i.test(x)).join(", ")} in profile/ — one click converts it to Markdown.` : "Drop resume.pdf or resume.docx into the profile/ folder, then reload.", action: p?.hasSource && !p?.hasMarkdown ? `<button class="primary" id="importBtn">Import</button>` : "" },
+    { done: st && (st.provider === "ollama" || !!st.keys?.[st.provider]), name: "Connect a model", hint: st ? `${st.provider} · ${st.model}` : "", action: `<button data-nav="settings">Settings</button>` },
+    { done: !!(f?.settings?.keywords?.length || state.feedKeywords), name: "Set up the job feed", hint: "Keywords, locations and a few company boards — new postings get scored for fit automatically.", action: `<button data-nav="feed">Feed</button>` },
+    { done: state.apps.length > 0, name: "Capture your first posting", hint: "Paste a URL, the text, or use the bookmarklet from any job page.", action: `<button data-nav="new">+ New</button>` },
+  ];
+  const todo = steps.filter((x) => !x.done).length;
+  return `${errBox()}
+    ${todo && !state.checklistHidden ? `<div class="card"><div class="toolbar"><h3 style="margin:0">Get set up <span class="muted">· ${steps.length - todo}/${steps.length}</span></h3><div class="sp"></div><button class="ghost icon" id="hideChecklist" title="Hide">×</button></div>
+      <div class="checklist">${steps.map((x) => `<div class="check ${x.done ? "done" : ""}"><span class="ic">${x.done ? "✓" : ""}</span><div class="sp"><b>${x.name}</b><small>${esc(x.hint)}</small></div>${x.done ? "" : x.action}</div>`).join("")}</div></div>` : ""}
+
+    <div class="card">
+      <div class="toolbar" style="margin-bottom:12px"><h2 style="margin:0">Today</h2><div class="sp"></div><button class="primary" id="dashNew">+ New application</button><button id="dashRefresh" ${f?.settings?.keywords?.length || state.feedKeywords ? "" : "disabled"} title="Refresh the job feed">↻ Feed</button></div>
+      <div class="tiles">
+        <div class="tile ${g?.periods.day.met ? "ok" : ""}" data-nav="goals"><b>${g ? `${g.periods.day.count}<span class="muted" style="font-size:14px">/${g.periods.day.goal || "–"}</span>` : "–"}</b><small>applied today${g?.streak ? ` · 🔥 ${g.streak}-day streak` : ""}</small></div>
+        <div class="tile ${due.length ? "warn" : ""}" data-filter="due"><b>${due.length}</b><small>follow-up${due.length === 1 ? "" : "s"} due</small></div>
+        <div class="tile ${hot ? "ok" : ""}" data-nav="feed"><b>${hot}</b><small>hot in the feed</small></div>
+        <div class="tile" data-nav="tasks"><b>${activeJobs().length}</b><small>task${activeJobs().length === 1 ? "" : "s"} running</small></div>
+      </div>
     </div>
-    <div class="card"><h3>Capture from your browser (LinkedIn, Workday, anything)</h3>
-      <p>Drag this to your bookmarks bar, then click it while viewing a job posting. It sends the page as <i>you</i> see it — logged in, fully rendered — so nothing gets blocked:</p>
+
+    ${due.length ? `<div class="card"><h3>Needs attention</h3>${due.slice(0, 6).map((a) => `<div class="act"><small>${a.due === "action" ? "⏰ " + esc(a.next_action || "action due") : `⏰ ${a.days_since}d quiet`}</small><a data-open-app="${a.id}"><b>${esc(a.company)}</b> · ${esc(a.role)}</a></div>`).join("")}</div>` : ""}
+
+    <div class="card"><div class="toolbar"><h3 style="margin:0">Recent activity</h3></div>
+      ${state.activity === null ? '<p class="muted"><span class="spinner"></span>Loading…</p>' : state.activity.length ? state.activity.map((e) => `<div class="act"><small>${fmtTime(e.created_at)}</small><span>${EV_ICON[e.kind] || "•"} <a data-open-app="${e.application_id}"><b>${esc(e.company)}</b></a> — ${esc(e.kind.replace("_", " "))}${e.detail ? `: <span class="muted">${esc(e.detail.slice(0, 90))}</span>` : ""}</span></div>`).join("") : '<p class="muted">Nothing yet — capture a posting to get going.</p>'}
+    </div>
+
+    <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">Capture from your browser — the bookmarklet</summary>
+      <p style="margin-top:10px">Drag this to your bookmarks bar, then click it while viewing a job posting. It sends the page as <i>you</i> see it — logged in, fully rendered — so nothing gets blocked, and it clears human-verification hand-offs too.</p>
       <p><a id="bookmarklet" class="bm" href="#" draggable="true">📌 Save to Job Tracker</a> <button id="bmCopy" style="margin-left:8px">Copy code</button> <span class="muted">(can't drag? copy, create a bookmark, paste as its URL)</span></p>
-      <p class="muted">The app must be running when you click it. On your phone, copy the posting text and use <b>+ New → paste the description</b> instead.</p>
-    </div>
-    <div class="card"><h3>Backup & export</h3>
-      <p class="muted">Everything lives on this machine. Take a copy now and then — the archive restores by unpacking it over a fresh checkout.</p>
-      <div class="toolbar" style="margin:0"><a href="/api/export/backup"><button class="primary">⬇ Full backup (.tar.gz)</button></a><a href="/api/export/applications.csv"><button>⬇ Applications (.csv)</button></a><span class="muted">Backup = database, application folders, base resume, templates, secret key.</span></div>
-    </div>
-    <div class="card"><h3>Answer bank</h3>
-      <input id="bankQ" placeholder="Search previous answers…">
-      <div id="bank"></div>
-    </div>`;
+    </details>
+    <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">Answer bank — search everything you've answered before</summary>
+      <input id="bankQ" placeholder="Search previous answers…" style="margin-top:10px"><div id="bank"></div>
+    </details>
+    <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">Backup & export</summary>
+      <div class="toolbar" style="margin:10px 0 0"><a href="/api/export/backup"><button class="primary">⬇ Full backup (.tar.gz)</button></a><a href="/api/export/applications.csv"><button>⬇ Applications (.csv)</button></a><span class="muted">Database, application folders, base resume, templates, secret key.</span></div>
+    </details>`;
 }
 
 function renderNew() {
@@ -572,26 +608,27 @@ function renderNew() {
 function renderDetail(a) {
   const tabs = ["job", "resume", "cover_letter", "questions", "prep", "timeline"];
   const names = { job: "Job", resume: "Resume", cover_letter: "Cover letter", questions: "Questions", prep: "Prep", timeline: "Timeline" };
-  return `${busy()}${errBox()}
-    <div class="card">
-      <div class="toolbar">
-        <div class="head-title"><h2>${esc(a.role)}</h2><div class="sub">${esc(a.company)}${a.location ? ` · ${esc(a.location)}` : ""}${a.salary ? ` · ${esc(a.salary)}` : ""} ${a.url ? `· <a href="${esc(a.url)}" target="_blank">posting ↗</a>` : ""}</div></div>
+  const nDoc = (k) => a.documents.filter((d) => d.kind === k).length;
+  const badge = { job: a.fit_score ? `★${a.fit_score}` : "", resume: nDoc("resume") ? `v${nDoc("resume")}` : "", cover_letter: nDoc("cover_letter") ? `v${nDoc("cover_letter")}` : "", questions: a.questions.length || "", prep: nDoc("prep") ? "✓" : "", timeline: a.events.length || "" };
+  return `${errBox()}
+    <div class="card fade">
+      <div class="toolbar" style="margin:0">
+        <div class="head-title"><h2>${esc(a.role)}</h2><div class="sub">${esc(a.company)}${a.location ? ` · ${esc(a.location)}` : ""}${a.salary ? ` · ${esc(a.salary)}` : ""} ${a.url ? `· <a href="${esc(a.url)}" target="_blank" rel="noopener">posting ↗</a>` : ""}</div></div>
         <div class="sp"></div>
-        <label style="margin:0;display:flex;align-items:center;gap:6px">Applied <input type="date" id="applied" value="${a.applied_at || ""}" style="width:auto"></label>
         <button id="delBtn" class="ghost icon" title="Delete application">🗑</button>
       </div>
       <div class="seg status-seg">${STATUSES.map((s) => `<button data-status="${s}" class="${s === a.status ? "on " + s : ""}">${s}</button>`).join("")}</div>
-      <div class="grid2" style="gap:10px">
-        <div class="field" style="margin:0"><label>Notes</label><textarea id="notes" style="min-height:60px">${esc(a.notes)}</textarea></div>
-        <div class="field" style="margin:0"><label>Next action</label>
-          <div class="toolbar" style="margin:0;flex-wrap:nowrap"><input type="date" id="nextAt" value="${a.next_action_at || ""}" style="width:auto"><input id="nextTxt" placeholder="e.g. chase recruiter, prep for screen" value="${esc(a.next_action || "")}"></div>
-          <div class="toolbar" style="margin:6px 0 0"><button data-log="followup" title="Logs a follow-up today and clears the next action">✓ Followed up</button><button data-log="call">☎ Call</button><button data-log="interview">🤝 Interview</button>${a.followed_up_at ? `<span class="muted">last follow-up ${a.followed_up_at}</span>` : ""}</div>
-        </div>
+      <div class="head-meta">
+        <label>Applied <input type="date" id="applied" value="${a.applied_at || ""}"></label>
+        <label>Next action <input type="date" id="nextAt" value="${a.next_action_at || ""}"><input id="nextTxt" placeholder="what, e.g. chase recruiter" value="${esc(a.next_action || "")}"></label>
+        <span><button data-log="followup" title="Logs a follow-up today and clears the next action">✓ Followed up</button> <button data-log="call" class="ghost">☎ Call</button> <button data-log="interview" class="ghost">🤝 Interview</button></span>
+        ${a.followed_up_at ? `<span class="muted">last follow-up ${a.followed_up_at}</span>` : ""}
       </div>
+      <textarea id="notes" class="notes-line" placeholder="Notes…" rows="1">${esc(a.notes)}</textarea>
     </div>
-    <div class="tabs">${tabs.map((t) => `<button data-tab="${t}" class="${state.tab === t ? "on" : ""}">${names[t]}</button>`).join("")}</div>
+    <div class="tabs">${tabs.map((t) => `<button data-tab="${t}" class="${state.tab === t ? "on" : ""}">${names[t]}${badge[t] ? `<span class="tb">${badge[t]}</span>` : ""}</button>`).join("")}</div>
     ${jobBadge(a.id, { job: ["reextract", "fit"], resume: ["generate", "condense", "learn"], cover_letter: ["generate", "learn"], questions: ["questions"], prep: ["prep"], timeline: [] }[state.tab])}
-    ${({ job: renderJob, resume: () => renderDoc(a, "resume"), cover_letter: () => renderDoc(a, "cover_letter"), questions: renderQuestions, prep: renderPrep, timeline: renderTimeline })[state.tab](a)}`;
+    <div class="fade">${({ job: renderJob, resume: () => renderDoc(a, "resume"), cover_letter: () => renderDoc(a, "cover_letter"), questions: renderQuestions, prep: renderPrep, timeline: renderTimeline })[state.tab](a)}</div>`;
 }
 
 function renderFit(a) {
@@ -718,22 +755,42 @@ function renderTimeline(a) {
     <p class="muted">Files: <code>applications/${esc(a.folder)}/</code></p>`;
 }
 
-const busy = () => state.busy ? `<div class="card"><span class="spinner"></span>${esc(state.busy)}</div>` : "";
-const errBox = () => state.err ? `<div class="card err">${esc(state.err)}</div>` : "";
+const busy = () => ""; // shown as a floating pill instead (see render)
+const errBox = () => state.err ? `<div class="errbar"><span>✗ ${esc(state.err)}</span><div class="sp"></div><button class="ghost icon" id="errClose" title="Dismiss">×</button></div>` : "";
+
+// Switch main view. Views that load data do so lazily and re-render when it lands.
+function go(view) {
+  state.app = null; state.err = null;
+  if (view === "apps") { state.sel = null; render(true); return; }
+  if (view === "home") { state.sel = isPhone() ? "home" : null; state.activity = null; api("GET", "/api/activity").then((a) => { state.activity = a; render(); }).catch(() => { state.activity = []; render(); }); }
+  else state.sel = view;
+  render(true);
+  if (view === "settings") loadModels(state.settings.provider, true);
+  if (view === "feed") loadFeed().then(() => render(true));
+  if (view === "goals") loadGoals().then(() => render(true));
+  if (view === "new") $("#nUrl")?.focus();
+}
 
 // ---------- events ----------
 function bindList() {
-  document.querySelectorAll(".row").forEach((r) => r.onclick = () => open(Number(r.dataset.id)));
-  document.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { state.filter = b.dataset.f; render(); });
+  document.querySelectorAll("#list .row").forEach((r) => r.onclick = () => open(Number(r.dataset.id)));
+  document.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { state.filter = b.dataset.f; render(true); });
+  document.querySelectorAll("#sortSeg [data-sort]").forEach((b) => b.onclick = () => { state.sort = b.dataset.sort; renderSidebar(); bindSidebar(); });
 }
-function bind() {
-  const sb = $("#search");
-  if (sb && sb.value !== state.search) sb.value = state.search;
-  if (sb) sb.oninput = () => { state.search = sb.value; renderSidebar(); bindList(); };
+// Sidebar + bottom nav are re-rendered on every poll, so their handlers are re-attached each time.
+function bindSidebar() {
   bindList();
-  $("#newBtn").onclick = () => { state.sel = "new"; state.app = null; state.err = null; render(); };
-  $("#settingsBtn").onclick = () => { state.sel = "settings"; state.app = null; state.err = null; render(); loadModels(state.settings.provider, true); };
-  $("#homeBtn").onclick = () => { state.sel = "home"; state.app = null; state.err = null; render(); };
+  document.querySelectorAll("#nav [data-nav], #bottomnav [data-nav]").forEach((b) => b.onclick = () => go(b.dataset.nav));
+  $("#goalMini") && ($("#goalMini").onclick = () => go("goals"));
+}
+// Bound once: static controls outside the re-rendered regions.
+function bindStatic() {
+  const sb = $("#search");
+  sb.oninput = () => { state.search = sb.value; renderSidebar(); bindSidebar(); };
+  $("#newBtn").onclick = () => go("new");
+  $("#helpBtn").onclick = () => { $("#helpOverlay").hidden = false; };
+  $("#helpClose").onclick = () => { $("#helpOverlay").hidden = true; };
+  $("#helpOverlay").onclick = (e) => { if (e.target === $("#helpOverlay")) $("#helpOverlay").hidden = true; };
   $("#themeBtn").onclick = () => {
     const root = document.documentElement;
     const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
@@ -741,7 +798,16 @@ function bind() {
     try { localStorage.setItem("theme", root.dataset.theme); } catch {}
   };
   $("#logoutBtn").onclick = () => run(null, async () => { await api("POST", "/api/logout"); location.href = "/"; });
-  $("#backBtn") && ($("#backBtn").onclick = () => { state.sel = null; state.app = null; state.err = null; render(); });
+}
+function bind() {
+  document.querySelectorAll("#main [data-nav]").forEach((b) => b.onclick = () => go(b.dataset.nav));
+  document.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { state.filter = b.dataset.filter; state.sel = null; state.app = null; render(true); });
+  $("#errClose") && ($("#errClose").onclick = () => { state.err = null; render(true); });
+  $("#hideChecklist") && ($("#hideChecklist").onclick = () => { state.checklistHidden = true; try { localStorage.setItem("checklistHidden", "1"); } catch {} render(true); });
+  $("#dashNew") && ($("#dashNew").onclick = () => go("new"));
+  $("#dashRefresh") && ($("#dashRefresh").onclick = () => enqueue("/api/feed/refresh", {}));
+  $("#notes") && ($("#notes").oninput = (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; });
+  $("#backBtn") && ($("#backBtn").onclick = () => go(isPhone() ? "apps" : "home"));
   document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; state.editJob = false; state.docMode = "preview"; state.tex = null; state.err = null; render(); });
 
   if ($("#sSave")) {
@@ -787,17 +853,15 @@ function bind() {
   }
 
   $("#importBtn") && ($("#importBtn").onclick = () => enqueue("/api/profile/import", {}, "Import resume"));
-  $("#tasksBtn").onclick = () => { state.sel = "tasks"; state.app = null; state.err = null; render(); };
-  $("#feedBtn").onclick = () => { state.sel = "feed"; state.app = null; state.err = null; render(); loadFeed().then(render); };
+  document.querySelectorAll("[data-open-app]").forEach((b) => b.onclick = () => open(Number(b.dataset.openApp)));
   if (state.sel === "feed") {
-    document.querySelectorAll("[data-feed-filter]").forEach((b) => b.onclick = () => { state.feedFilter = b.dataset.feedFilter; loadFeed().then(render); });
+    document.querySelectorAll("[data-feed-filter]").forEach((b) => b.onclick = () => { state.feedFilter = b.dataset.feedFilter; loadFeed().then(() => render(true)); });
     $("#feedRefresh") && ($("#feedRefresh").onclick = () => enqueue("/api/feed/refresh", {}));
     $("#feedScore") && ($("#feedScore").onclick = () => enqueue("/api/feed/score", {}));
     document.querySelectorAll("[data-feed-score1]").forEach((b) => b.onclick = () => enqueue("/api/feed/score", { ids: [Number(b.dataset.feedScore1)] }));
     document.querySelectorAll("[data-feed-track]").forEach((b) => b.onclick = () => enqueue(`/api/feed/${b.dataset.feedTrack}/track`, {}));
     document.querySelectorAll("[data-feed-dismiss]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedDismiss}/dismiss`); await loadFeed(); }));
     document.querySelectorAll("[data-feed-restore]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedRestore}/restore`); await loadFeed(); }));
-    document.querySelectorAll("[data-open-app]").forEach((b) => b.onclick = () => open(Number(b.dataset.openApp)));
     $("#feedPurge") && ($("#feedPurge").onclick = () => run(null, async () => { await api("DELETE", "/api/feed/dismissed"); await loadFeed(); }));
     $("#fTestBtn") && ($("#fTestBtn").onclick = () => { const board = $("#fTest").value; run("Testing board…", async () => { state.feedTest = await api("POST", "/api/feed/test", { board }); }); });
     $("#fSave") && ($("#fSave").onclick = () => {
@@ -807,7 +871,6 @@ function bind() {
       run("Saving feed settings…", async () => { await api("PUT", "/api/feed/settings", body); await loadFeed(); });
     });
   }
-  $("#goalMini") && ($("#goalMini").onclick = () => { state.sel = "goals"; state.app = null; state.err = null; render(); loadGoals().then(render); });
   $("#gSave") && ($("#gSave").onclick = () => {
     const body = { daily: $("#gDaily").value, weekly: $("#gWeekly").value, monthly: $("#gMonthly").value, weekends: $("#gWeekends").checked, followupDays: $("#gFollow").value };
     run("Saving targets…", async () => { state.goals = await api("PUT", "/api/goals", body); await loadList(); });
@@ -919,11 +982,34 @@ async function loadModels(provider, quiet) {
   } finally { loading.delete(provider); }
 }
 
-// ⌘S / Ctrl+S saves whichever editor is open.
+// Keyboard: ⌘S saves the open editor; single keys navigate when not typing.
 document.addEventListener("keydown", (e) => {
-  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s") return;
-  const btn = $("#saveDoc") || $("#texSave") || $("#eSave");
-  if (btn) { e.preventDefault(); btn.click(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+    const btn = $("#saveDoc") || $("#texSave") || $("#eSave");
+    if (btn) { e.preventDefault(); btn.click(); }
+    return;
+  }
+  const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+  if (e.key === "Escape") {
+    if (!$("#helpOverlay").hidden) { $("#helpOverlay").hidden = true; return; }
+    if (typing) { document.activeElement.blur(); return; }
+    if (state.sel !== null) go(isPhone() ? "apps" : "home");
+    return;
+  }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "?") { $("#helpOverlay").hidden = !$("#helpOverlay").hidden; e.preventDefault(); }
+  else if (e.key === "/") { $("#search").focus(); $("#search").select(); e.preventDefault(); }
+  else if (e.key === "n") { go("new"); e.preventDefault(); }
+  else if (e.key === "j" || e.key === "k") {
+    const ids = [...document.querySelectorAll(".row")].map((r) => Number(r.dataset.id));
+    if (!ids.length) return;
+    const i = ids.indexOf(state.sel), next = e.key === "j" ? ids[Math.min(ids.length - 1, i + 1)] : ids[Math.max(0, i - 1)];
+    if (next !== state.sel) open(next);
+  }
+  else if (/^[1-6]$/.test(e.key) && state.app) {
+    const t = ["job", "resume", "cover_letter", "questions", "prep", "timeline"][Number(e.key) - 1];
+    state.tab = t; state.editJob = false; state.docMode = "preview"; state.tex = null; render(true);
+  }
 });
 
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
@@ -961,7 +1047,10 @@ async function waitForCapture() {
 (async () => {
   [state.profile, state.settings, state.jobs, state.goals] = await Promise.all([api("GET", "/api/profile"), api("GET", "/api/settings"), api("GET", "/api/jobs"), api("GET", "/api/goals").catch(() => null)]);
   await loadList();
-  api("GET", "/api/feed?status=open").then((f) => { state.feedHot = f.counts.hot; renderSidebar(); }).catch(() => {});
+  bindStatic();
+  try { state.checklistHidden = localStorage.getItem("checklistHidden") === "1"; } catch {}
+  api("GET", "/api/feed?status=open").then((f) => { state.feedHot = f.counts.hot; state.feedKeywords = f.settings.keywords.length; render(); }).catch(() => {});
+  api("GET", "/api/activity").then((a) => { state.activity = a; render(); }).catch(() => { state.activity = []; });
   if (new URLSearchParams(location.search).get("capture")) { state.sel = "new"; state.busy = "Waiting for the page from your browser…"; waitForCapture(); }
   render();
   if ($("#bankQ")) $("#bankQ").dispatchEvent(new Event("input"));

@@ -95,6 +95,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     return send(res, 200, pendingCaptures.shift() ?? null); // oldest first, so nothing is skipped
   }
 
+  // Dashboard: recent activity across applications
+  if (m("GET", /^\/api\/activity$/)) {
+    const rows = db.prepare(`SELECT e.id, e.kind, e.detail, e.created_at, a.id AS application_id, a.company, a.role FROM events e JOIN applications a ON a.id = e.application_id
+      WHERE e.kind NOT IN ('questions_found') ORDER BY e.id DESC LIMIT 12`).all();
+    return send(res, 200, rows);
+  }
+
   // Goals & achievements
   if (m("GET", /^\/api\/goals$/)) { checkAchievements(); return send(res, 200, { ...stats(), achievements: listAchievements() }); }
   if (m("PUT", /^\/api\/goals$/)) { saveGoals(await readJson(req)); return send(res, 200, { ...stats(), achievements: listAchievements() }); }

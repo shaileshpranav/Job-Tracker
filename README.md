@@ -20,6 +20,14 @@ npm start                    # http://localhost:4321
 
 The home screen has a **📌 Save to Job Tracker** bookmarklet. Drag it to your bookmarks bar; click it while viewing a posting in your normal, logged-in browser. It sends the page *as rendered* to the app (which must be running) and opens the new application — no scraping, so nothing gets blocked. The original page text is kept with the application, so **↻ Re-extract** on the Job tab can re-run extraction later with a better model, and **↻ Fetch again** re-scrapes the URL. Entries that look thin (no location/requirements) get a hint banner pointing at these.
 
+## Getting around
+
+- **Sidebar nav** (desktop) / **bottom bar** (phone): Home · Feed · Goals · Tasks · Settings — badges show hot feed postings and running tasks. On a phone there's also **Apps** for the list, since Home is the dashboard.
+- **Home** is a dashboard: a setup checklist until everything's configured, today's numbers (applied vs goal, follow-ups due, hot postings, running tasks), what needs attention, and recent activity; the bookmarklet, answer bank and backups live in collapsible sections below.
+- The list can be sorted (Recent · Fit · Applied · A–Z) and filtered by status or ⏰ follow-ups; rows carry a colour bar for the stage.
+- Keyboard: `n` new, `/` search, `j`/`k` next/previous application, `1`–`6` tabs, `⌘S` save, `Esc` back, `?` for the list.
+- Background refreshes never move your scroll position or steal focus; progress shows as a small pill top-right.
+
 ## Appearance
 
 Follows your system light/dark setting; the ◐ button at the bottom of the sidebar overrides it (remembered per browser). All colours come from CSS tokens at the top of `src/public/index.html`.
