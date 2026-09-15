@@ -65,8 +65,11 @@ function styleBlock(kind: StyleKind) {
 const resumeSystem = (c: Ctx) => `${getPrompt("resume_system")} ${getPrompt("honesty")}${styleBlock("resume")}\n\n${profileBlock(c)}`;
 
 /** First draft. The caller decides (by real page count when LaTeX is available) whether to condense. */
-export function tailorResume(c: Ctx) {
-  return getLLM("resume").generate(resumeSystem(c), `${getPrompt("resume_task")}\n\n${jobBlock(c.job)}`);
+export function tailorResume(c: Ctx, emphasize: string[] = []) {
+  const emph = emphasize.length
+    ? `\n\nATS note: where it is truthful, use these exact terms from the posting (they are what a screening system will search for): ${emphasize.join(", ")}. Never claim a skill the base resume doesn't support — if a term doesn't apply, leave it out.`
+    : "";
+  return getLLM("resume").generate(resumeSystem(c), `${getPrompt("resume_task")}${emph}\n\n${jobBlock(c.job)}`);
 }
 
 /** Bounded shortening pass for a draft that runs past one page. */

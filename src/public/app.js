@@ -2,7 +2,7 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null };
 
 // ---------- tiny Markdown renderer (headings, lists, emphasis, links) ----------
 function mdInline(t) {
@@ -117,7 +117,7 @@ async function onJobFinished(j) {
   }
   if (state.app && state.app.id === (j.application_id ?? result.application_id)) {
     state.app = await api("GET", `/api/applications/${state.app.id}`);
-    if (j.type === "generate") { state.tab = result.what === "cover_letter" ? "cover_letter" : "resume"; state.docMode = "preview"; state.tex = null; }
+    if (j.type === "generate") { state.tab = result.what === "cover_letter" ? "cover_letter" : "resume"; state.docMode = "preview"; state.tex = null; state.ats = null; }
     if (j.type === "condense") { state.docMode = "preview"; state.tex = null; }
     if (j.type === "prep") state.tab = "prep";
   }
@@ -474,6 +474,16 @@ function renderSettings() {
         </div></div>
     </div>
 
+    <div class="card"><h2>Base resumes</h2>
+      <p class="muted">One base is fine; two or three (e.g. “AI engineer” and “Platform / backend”) let the fit score pick the better one per posting and tailor from it. Files live in <code>profile/</code> as <code>resume.md</code> (default) and <code>resume-&lt;name&gt;.md</code>; drop a matching <code>resume-&lt;name&gt;.pdf</code> to import one.</p>
+      ${(state.profile?.resumes || []).map((r) => `<div class="base-row" data-base-key="${esc(r.key)}">
+        <div class="sp"><b>${esc(r.label)}</b> <span class="muted">· ${esc(r.file || r.source || "")}${r.hasMarkdown ? ` · ${r.words} words` : " · not imported yet"}${r.key === "default" ? " · default" : ""}</span></div>
+        ${r.hasMarkdown ? `<button class="ghost" data-base-edit="${esc(r.key)}">${state.baseEdit?.key === r.key ? "Close" : "Edit"}</button>` : `<button class="primary" data-base-import="${esc(r.key)}">Import from ${esc(r.source)}</button>`}
+        ${r.key !== "default" && r.hasMarkdown ? `<button class="ghost" data-base-del="${esc(r.key)}" title="Delete this base">×</button>` : ""}
+      </div>${state.baseEdit?.key === r.key ? `<div style="margin:6px 0 12px"><textarea class="doc" id="baseText" style="min-height:320px">${esc(state.baseEdit.markdown)}</textarea><div class="toolbar" style="margin:6px 0 0"><button class="primary" id="baseSave">Save</button><span class="muted">Add <code>&lt;!-- label: Platform / backend --&gt;</code> as the first line to name it.</span></div></div>` : ""}`).join("")}
+      <div class="toolbar" style="margin-top:10px"><input id="baseNew" placeholder="new base name, e.g. platform" style="width:220px"><span class="muted">copy of</span><div class="seg">${(state.profile?.resumes || []).filter((r) => r.hasMarkdown).map((r, i) => `<button data-base-from="${esc(r.key)}" class="${i === 0 ? "on" : ""}">${esc(r.label)}</button>`).join("")}</div><button id="baseCreate">Create</button></div>
+    </div>
+
     <div class="card"><h2>Learned formatting preferences</h2>
       <p class="muted">Rules the app has learned from your manual edits (🎓 on a resume / cover letter tab). Injected into every future generation as formatting guidance only — they never add or change facts. Edit freely; one rule per line.</p>
       ${state.style ? ["resume", "cover_letter"].map((k) => `<details class="prompt" data-style="${k}" ${state.style[k] ? "open" : ""}>
@@ -638,8 +648,11 @@ function renderFit(a) {
   if (a.fit_status === "error") return `<div class="card fit"><span class="err">Fit scoring failed: ${esc(f?.error || "unknown error")}</span> <button data-fit>Retry</button></div>`;
   if (!f) return `<div class="card fit"><div class="toolbar" style="margin:0"><span class="muted">${state.profile?.hasMarkdown ? "Not scored yet." : "Import your resume first, then score how well this role fits."}</span><div class="sp"></div><button data-fit ${state.profile?.hasMarkdown ? "" : "disabled"}>★ Score fit</button></div></div>`;
   const chips = (arr, cls) => arr.length ? arr.map((x) => `<span class="req ${cls}">${esc(x)}</span>`).join("") : '<span class="muted">none</span>';
+  const bases = a.resumes || [];
+  const baseRow = bases.length > 1 ? `<div class="toolbar" style="margin:0 0 8px;gap:6px"><span class="muted">Base resume:</span><div class="seg">${bases.map((b) => `<button data-base="${esc(b.key)}" class="${(a.resume_key || "default") === b.key ? "on" : ""}" title="${a.fit_all?.[b.key] ? `Fit ${a.fit_all[b.key].score}/5 with this base` : "Not scored with this base yet"}">${esc(b.label)}${a.fit_all?.[b.key] ? ` <span class="tb">★${a.fit_all[b.key].score}</span>` : ""}</button>`).join("")}</div>${a.resume_pinned ? '<span class="muted">pinned by you</span>' : '<span class="muted">best fit chosen automatically</span>'}</div>` : "";
   return `<div class="card fit">
-    <div class="toolbar" style="margin:0 0 6px"><div class="dots">${dots(f.score)}</div><b style="font-size:16px">${f.score}/5</b><span>${esc(f.verdict)}</span><div class="sp"></div><button data-fit title="Re-score (e.g. after updating resume.md)">↻ Re-score</button></div>
+    <div class="toolbar" style="margin:0 0 6px"><div class="dots">${dots(f.score)}</div><b style="font-size:16px">${f.score}/5</b><span>${esc(f.verdict)}</span><div class="sp"></div><button data-fit title="Re-score against every base resume">↻ Re-score</button></div>
+    ${baseRow}
     <div class="fitgrid">
       <div><h4>Met</h4>${chips(f.met, "ok")}</div>
       <div><h4>Partial</h4>${chips(f.partial, "warn")}</div>
@@ -703,6 +716,7 @@ function renderDoc(a, kind) {
     else body = `<div class="preview ${kind}">${mdToHtml(doc.content)}</div>`;
   } else body = `<p class="muted">No ${label} yet. Generation uses <code>profile/resume.md</code> + this job's description${kind === "resume" ? ", and is constrained to one page" : ""}.</p>`;
   const modes = [["preview", "Preview"], ["edit", "Edit"], ...(a.latex ? [["tex", "LaTeX"]] : []), ["diff", "Compare"]];
+  const ats = kind === "resume" ? renderAts(a, doc) : "";
   return `<div class="card">
     <div class="doc-actions">
       <div class="doc-group"><span>Generate</span><div>
@@ -720,9 +734,43 @@ function renderDoc(a, kind) {
       </div></div>
       </div>` : ""}
     </div>
+    ${ats}
     ${doc ? `<div class="doc-meta"><span class="v">v${docs.length}</span><span>${fmtTime(doc.created_at)}</span><span>·</span>${sizeInfo}<div class="sp" style="flex:1"></div>${mode === "edit" ? `<button id="saveDoc" class="primary" data-doc="${doc.id}">Save edits</button>` : ""}</div>` : ""}
     ${body}
   </div>`;
+}
+
+// Deterministic ATS keyword check — no model, recomputed on demand from the posting.
+function renderAts(a, doc) {
+  const r = state.ats;
+  const stale = !r || r.appId !== a.id || r.docId !== (doc?.id ?? "base");
+  if (stale) { loadAts(a, doc); }
+  const rep = stale ? null : r;
+  const bar = (pct, cls) => `<div class="ats-bar"><div class="${cls}" style="width:${pct}%"></div></div>`;
+  return `<details class="ats" ${state.atsOpen ? "open" : ""} id="atsBox">
+    <summary><span>🔍 ATS keyword check${rep ? ` — <b>${rep.requiredCoverage}%</b> of required terms, ${rep.coverage}% overall` : ""}</span><span class="muted">${rep ? `${rep.label} · ${rep.words} words` : "checking…"}</span></summary>
+    ${rep ? `
+      <div class="ats-grid">
+        <div><div class="muted">Required terms <b>${rep.matched.filter((t) => t.required).length}/${rep.matched.filter((t) => t.required).length + rep.missing.filter((t) => t.required).length}</b></div>${bar(rep.requiredCoverage, rep.requiredCoverage >= 80 ? "ok" : rep.requiredCoverage >= 50 ? "warn" : "bad")}</div>
+        <div><div class="muted">All terms <b>${rep.matched.length}/${rep.matched.length + rep.missing.length}</b></div>${bar(rep.coverage, rep.coverage >= 70 ? "ok" : rep.coverage >= 40 ? "warn" : "bad")}</div>
+      </div>
+      ${rep.missing.length ? `<div class="ats-row"><span class="muted">Missing</span><div>${rep.missing.map((t) => `<span class="req bad" title="${t.required ? "From the requirements" : "Mentioned in the description"}">${esc(t.term)}${t.required ? "" : '<small> ·</small>'}</span>`).join("")}</div></div>` : ""}
+      <div class="ats-row"><span class="muted">Found</span><div>${rep.matched.map((t) => `<span class="req ok" title="${t.aliasHit ? `matched via “${t.aliasHit}”` : ""}${t.required ? " · required" : ""}">${esc(t.term)} <small>×${t.count}</small></span>`).join("") || '<span class="muted">none</span>'}</div></div>
+      ${rep.overused.length ? `<div class="ats-row"><span class="muted">Overused</span><div class="muted">${esc(rep.overused.join(", "))} — reads as keyword stuffing.</div></div>` : ""}
+      <div class="toolbar" style="margin:8px 0 0">
+        ${rep.missing.some((t) => t.required) ? `<button data-emphasize="${esc(JSON.stringify(rep.missing.filter((t) => t.required).map((t) => t.term)))}" title="Regenerate the resume asking the model to use these exact terms where truthful">✨ Regenerate with the missing required terms</button>` : ""}
+        ${doc ? `<button class="ghost" data-ats-base>Compare base resume instead</button>` : ""}
+        <span class="muted">Deterministic — no model involved. Terms come from the extracted requirements (required) and technical terms in the description (·). Aliases like Postgres/PostgreSQL and k8s/Kubernetes count.</span>
+      </div>` : ""}
+  </details>`;
+}
+async function loadAts(a, doc) {
+  const docId = doc?.id ?? "base";
+  if (loadAts.inflight === `${a.id}:${docId}`) return;
+  loadAts.inflight = `${a.id}:${docId}`;
+  try { const r = await api("GET", `/api/applications/${a.id}/ats?doc=${doc ? doc.id : "base"}`); state.ats = { ...r, appId: a.id, docId }; if (state.app?.id === a.id) render(true); }
+  catch (e) { state.ats = { appId: a.id, docId, error: e.message, matched: [], missing: [], overused: [], coverage: 0, requiredCoverage: 0, words: 0, label: "?" }; }
+  finally { loadAts.inflight = null; }
 }
 
 function renderQuestions(a) {
@@ -826,6 +874,19 @@ function bind() {
     });
     $("#sAuthClear") && ($("#sAuthClear").onclick = () => run("Removing password…", async () => { state.settings.auth = await api("PUT", "/api/settings/auth", { clear: true }); }));
 
+    document.querySelectorAll("[data-base-import]").forEach((b) => b.onclick = () => enqueue("/api/profile/import", { key: b.dataset.baseImport }));
+    document.querySelectorAll("[data-base-edit]").forEach((b) => b.onclick = () => run(null, async () => {
+      if (state.baseEdit?.key === b.dataset.baseEdit) { state.baseEdit = null; return; }
+      const r = await api("GET", `/api/profile/resume?key=${encodeURIComponent(b.dataset.baseEdit)}`); state.baseEdit = { key: r.key, markdown: r.markdown };
+    }));
+    $("#baseSave") && ($("#baseSave").onclick = () => { const markdown = $("#baseText").value, key = state.baseEdit.key; run("Saving base resume…", async () => { await api("PUT", `/api/profile/resumes/${encodeURIComponent(key)}`, { markdown }); state.baseEdit = null; state.profile = await api("GET", "/api/profile"); }); });
+    document.querySelectorAll("[data-base-del]").forEach((b) => b.onclick = () => { if (!confirm(`Delete the “${b.dataset.baseDel}” base resume?`)) return; run("Deleting…", async () => { await api("DELETE", `/api/profile/resumes/${encodeURIComponent(b.dataset.baseDel)}`); state.profile = await api("GET", "/api/profile"); }); });
+    document.querySelectorAll("[data-base-from]").forEach((b) => b.onclick = () => { document.querySelectorAll("[data-base-from]").forEach((x) => x.classList.remove("on")); b.classList.add("on"); });
+    $("#baseCreate") && ($("#baseCreate").onclick = () => {
+      const key = $("#baseNew").value.trim(), copyFrom = $("[data-base-from].on")?.dataset.baseFrom || "default";
+      if (!key) { state.err = "Give the new base a short name, e.g. platform."; render(true); return; }
+      run("Creating base…", async () => { const r = await api("PUT", `/api/profile/resumes/${encodeURIComponent(key)}`, { copyFrom, label: key.replace(/[-_.]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) }); state.profile = await api("GET", "/api/profile"); const md = await api("GET", `/api/profile/resume?key=${encodeURIComponent(r.key)}`); state.baseEdit = { key: r.key, markdown: md.markdown }; });
+    });
     if (!state.prompts) api("GET", "/api/prompts").then((p) => { state.prompts = p; if (state.sel === "settings") render(); });
     if (!state.style) api("GET", "/api/style").then((t) => { state.style = t; if (state.sel === "settings") render(); });
     document.querySelectorAll("[data-style-save]").forEach((b) => b.onclick = () => { const k = b.dataset.styleSave, text = $(`[data-style="${k}"] .styleText`).value; run("Saving…", async () => { state.style = await api("PUT", `/api/style/${k}`, { text }); }); });
@@ -852,7 +913,7 @@ function bind() {
     });
   }
 
-  $("#importBtn") && ($("#importBtn").onclick = () => enqueue("/api/profile/import", {}, "Import resume"));
+  $("#importBtn") && ($("#importBtn").onclick = () => enqueue("/api/profile/import", { key: "default" }));
   document.querySelectorAll("[data-open-app]").forEach((b) => b.onclick = () => open(Number(b.dataset.openApp)));
   if (state.sel === "feed") {
     document.querySelectorAll("[data-feed-filter]").forEach((b) => b.onclick = () => { state.feedFilter = b.dataset.feedFilter; loadFeed().then(() => render(true)); });
@@ -922,6 +983,7 @@ function bind() {
   $("#prepBtn") && ($("#prepBtn").onclick = () => enqueue(`/api/applications/${a.id}/prep`, {}));
   $("#editJob") && ($("#editJob").onclick = () => { state.editJob = true; render(); });
   document.querySelectorAll("[data-fit]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/fit`, {}));
+  document.querySelectorAll("[data-base]").forEach((b) => b.onclick = () => run("Switching base resume…", async () => { state.app = await api("PATCH", `/api/applications/${a.id}`, { resume_key: b.dataset.base }); state.ats = null; await loadList(); }));
   document.querySelectorAll("[data-reextract]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/reextract`, { source: b.dataset.reextract }));
   $("#eCancel") && ($("#eCancel").onclick = () => { state.editJob = false; render(); });
   $("#eSave") && ($("#eSave").onclick = () => {
@@ -939,7 +1001,7 @@ function bind() {
   document.querySelectorAll("[data-diff]").forEach((b) => b.onclick = () => { state.diffAgainst = b.dataset.diff; render(); });
   document.querySelectorAll("[data-docmode]").forEach((b) => b.onclick = () => {
     state.docMode = b.dataset.docmode; render();
-    if (state.docMode === "diff" && state.baseResume == null) api("GET", "/api/profile/resume").then((r) => { state.baseResume = r.markdown; if (state.docMode === "diff") render(); }).catch(() => { state.baseResume = ""; });
+    if (state.docMode === "diff" && state.baseResume == null) api("GET", `/api/profile/resume?key=${encodeURIComponent(a.resume_key || "default")}`).then((r) => { state.baseResume = r.markdown; if (state.docMode === "diff") render(); }).catch(() => { state.baseResume = ""; });
     if (state.docMode === "tex") {
       const doc = a.documents.find((d) => d.kind === state.tab);
       if (doc && state.tex?.id !== doc.id) api("GET", `/api/documents/${doc.id}/tex`).then((t) => { state.tex = { id: doc.id, ...t }; if (state.docMode === "tex") render(); });
@@ -953,6 +1015,9 @@ function bind() {
   }); });
   $("#texReset") && ($("#texReset").onclick = () => run("Regenerating LaTeX from Markdown…", async () => { await api("PUT", `/api/documents/${state.tex.id}/tex`, { reset: true }); state.tex = null; state.app = await api("GET", `/api/applications/${a.id}`); const doc = state.app.documents.find((d) => d.kind === state.tab); const t = await api("GET", `/api/documents/${doc.id}/tex`); state.tex = { id: doc.id, ...t }; }));
   document.querySelectorAll("[data-condense]").forEach((b) => b.onclick = () => enqueue(`/api/documents/${b.dataset.condense}/condense`, {}));
+  document.querySelectorAll("[data-emphasize]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/generate`, { what: "resume", emphasize: JSON.parse(b.dataset.emphasize) }));
+  $("[data-ats-base]") && ($("[data-ats-base]").onclick = () => { state.ats = null; loadAts(a, null).then(() => render(true)); });
+  $("#atsBox") && ($("#atsBox").ontoggle = () => { state.atsOpen = $("#atsBox").open; });
   document.querySelectorAll("[data-learn]").forEach((b) => b.onclick = () => enqueue(`/api/documents/${b.dataset.learn}/learn`, {}));
   $("#saveDoc") && ($("#saveDoc").onclick = () => { const id = $("#saveDoc").dataset.doc, content = $("#docText").value; run(a.latex ? "Saving and rebuilding PDF…" : "Saving…", async () => { const r = await api("PUT", `/api/documents/${id}`, { content }); state.app = await api("GET", `/api/applications/${a.id}`); state.docMode = "preview"; state.tex = null; if (r.pdfError) state.err = `Saved, but the PDF failed to build: ${r.pdfError}`; }); });
 

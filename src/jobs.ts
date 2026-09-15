@@ -10,7 +10,7 @@ import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLette
 import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, isExcluded, insertNew, unscoredIds, getFeedItem, markFeedRefreshed, type Posting } from "./feed.ts";
 import { compilePdf } from "./latex.ts";
 import { registerJob, enqueue, NeedsYou } from "./queue.ts";
-import { loadResume, loadNotes } from "./profile.ts";
+import { loadResume, loadNotes, importedResumes, importResume, hasAnyResume, DEFAULT_KEY } from "./profile.ts";
 import { saveStyle } from "./settings.ts";
 import { buildPdf, isLatexReady, writeJobFile, writeQuestionsFile } from "./documents.ts";
 
@@ -37,7 +37,7 @@ export function createApplication(job: JobExtract, url: string | null, sourceTex
 }
 
 export function fitInBackground(appId: number) {
-  if (!fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) return; // nothing to compare against yet
+  if (!hasAnyResume()) return; // nothing to compare against yet
   const app = getApp(appId)!;
   enqueue("fit", `Fit score — ${app.company}`, {}, appId);
 }
@@ -87,6 +87,23 @@ registerJob("capture", async (body, _job, progress) => {
 
 // ---------- job feed ----------
 
+/** All imported base resumes as {key, label, md}. */
+async function loadBases() {
+  const out = [];
+  for (const r of importedResumes()) out.push({ key: r.key, label: r.label, md: await loadResume(r.key) });
+  return out;
+}
+/** Quick-score a posting against every base; keep the best, and say which base when there's more than one. */
+async function bestQuickFit(bases: { key: string; label: string; md: string }[], notes: string, posting: any) {
+  let best: { score: number; reason: string } | null = null;
+  for (const b of bases) {
+    const r = await quickFit(b.md, notes, posting);
+    const reason = `${bases.length > 1 ? `[${b.label}] ` : ""}${cleanReason(r.reason)}`;
+    if (!best || r.score > best.score) best = { score: r.score, reason };
+  }
+  return best!;
+}
+
 /** Small models sometimes pad structured fields with junk; keep one clean sentence. */
 const cleanReason = (r: string) => String(r ?? "").replace(/\s+/g, " ").replace(/(\b\S+\b)(?:\s+\1\b){3,}/g, "$1").trim().slice(0, 240);
 
@@ -112,14 +129,14 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
   // Triage the newest unscored ones, up to the cap.
   const ids = unscoredIds(s.scorePerRefresh);
   let scored = 0, hot = 0;
-  if (ids.length && fs.existsSync(path.join(PROFILE_DIR, "resume.md"))) {
-    const resume = await loadResume(), notes = loadNotes();
+  if (ids.length && hasAnyResume()) {
+    const bases = await loadBases(), notes = loadNotes();
     for (const [i, id] of ids.entries()) {
       progress(`Scoring ${i + 1}/${ids.length}…`);
       const it = getFeedItem(id);
       try {
-        const r = await quickFit(resume, notes, it);
-        db.prepare("UPDATE feed_items SET fit_score = ?, fit_reason = ? WHERE id = ?").run(r.score, cleanReason(r.reason), id);
+        const r = await bestQuickFit(bases, notes, it);
+        db.prepare("UPDATE feed_items SET fit_score = ?, fit_reason = ? WHERE id = ?").run(r.score, r.reason, id);
         scored++; if (r.score >= s.minScore) hot++;
       } catch (e: any) {
         db.prepare("UPDATE feed_items SET fit_reason = ? WHERE id = ?").run(`scoring failed: ${e.message}`.slice(0, 300), id);
@@ -131,13 +148,13 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
 
 registerJob("feed_score", async ({ ids }, _job, progress) => {
   const s = feedSettings();
-  const resume = await loadResume(), notes = loadNotes();
+  const bases = await loadBases(), notes = loadNotes();
   let hot = 0;
   for (const [i, id] of (ids as number[]).entries()) {
     const it = getFeedItem(id); if (!it) continue;
     progress(`Scoring ${it.company} — ${it.title} (${i + 1}/${ids.length})…`);
-    const r = await quickFit(resume, notes, it);
-    db.prepare("UPDATE feed_items SET fit_score = ?, fit_reason = ? WHERE id = ?").run(r.score, cleanReason(r.reason), id);
+    const r = await bestQuickFit(bases, notes, it);
+    db.prepare("UPDATE feed_items SET fit_score = ?, fit_reason = ? WHERE id = ?").run(r.score, r.reason, id);
     if (r.score >= s.minScore) hot++;
   }
   return { scored: ids.length, hot };
@@ -173,24 +190,33 @@ registerJob("fit", async (_p, job, progress) => {
   const appId = job.application_id!;
   db.prepare("UPDATE applications SET fit_status = 'pending' WHERE id = ?").run(appId);
   try {
-    progress("Comparing the posting with your base resume…");
-    const fit = await scoreFit(await ctxFor(getApp(appId)!));
-    db.prepare("UPDATE applications SET fit_score = ?, fit_json = ?, fit_status = 'done' WHERE id = ?").run(fit.score, JSON.stringify(fit), appId);
-    logEvent(appId, "fit", `Scored ${fit.score}/5 — ${fit.verdict}`);
-    return { application_id: appId, score: fit.score };
+    const app = getApp(appId)!;
+    const bases = importedResumes();
+    const all: Record<string, any> = {};
+    for (const [i, b] of bases.entries()) {
+      progress(bases.length > 1 ? `Comparing with your “${b.label}” resume (${i + 1}/${bases.length})…` : "Comparing the posting with your base resume…");
+      all[b.key] = { label: b.label, ...(await scoreFit(await ctxFor(app, b.key))) };
+    }
+    // Use the pinned base if the user chose one, otherwise the best-scoring base.
+    const bestKey = Object.keys(all).sort((a, b) => all[b].score - all[a].score)[0] ?? DEFAULT_KEY;
+    const key = app.resume_pinned && app.resume_key && all[app.resume_key] ? app.resume_key : bestKey;
+    const fit = all[key];
+    db.prepare("UPDATE applications SET fit_score = ?, fit_json = ?, fit_all = ?, resume_key = ?, fit_status = 'done' WHERE id = ?").run(fit.score, JSON.stringify(fit), JSON.stringify(all), key, appId);
+    logEvent(appId, "fit", `Scored ${fit.score}/5${bases.length > 1 ? ` with the “${fit.label}” resume` : ""} — ${fit.verdict}`);
+    return { application_id: appId, score: fit.score, resume_key: key };
   } catch (e: any) {
     db.prepare("UPDATE applications SET fit_status = 'error', fit_json = ? WHERE id = ?").run(JSON.stringify({ error: e.message }), appId);
     throw e;
   } finally { touch(appId); }
 });
 
-registerJob("generate", async ({ what = "both" }, job, progress) => {
+registerJob("generate", async ({ what = "both", emphasize = [] }, job, progress) => {
   const app = mustApp(String(job.application_id));
   const ctx = await ctxFor(app);
   const out: Record<string, string> = {};
   if (what === "resume" || what === "both") {
-    progress("Drafting the tailored resume…");
-    let md = await tailorResume(ctx);
+    progress(emphasize.length ? `Drafting the tailored resume (working in ${emphasize.length} ATS terms)…` : "Drafting the tailored resume…");
+    let md = await tailorResume(ctx, emphasize);
     let note = "Tailored resume";
     if (isLatexReady()) {
       progress("Compiling PDF to measure pages…");
@@ -269,15 +295,15 @@ registerJob("prep", async (_p, job, progress) => {
   return { application_id: app.id, document_id: id };
 });
 
-registerJob("import", async (_p, _job, progress) => {
-  progress("Converting your resume to Markdown…");
-  await loadResume();
-  return { ok: true };
+registerJob("import", async ({ key = DEFAULT_KEY }, _job, progress) => {
+  progress(`Converting your ${key === DEFAULT_KEY ? "" : key + " "}resume to Markdown…`);
+  await importResume(key);
+  return { ok: true, key };
 });
 
-export async function ctxFor(app: Application) {
+export async function ctxFor(app: Application, resumeKey?: string) {
   return {
-    resume: await loadResume(),
+    resume: await loadResume(resumeKey ?? app.resume_key ?? undefined),
     notes: loadNotes(),
     job: { company: app.company, role: app.role, description: app.description ?? "", requirements: app.requirements ? JSON.parse(app.requirements) : [] },
   };
