@@ -11,7 +11,9 @@ import { PROFILE_DIR } from "./db.ts";
 import { pdfToMarkdown, textToMarkdown } from "./ai.ts";
 
 export const DEFAULT_KEY = "default";
-const mdFile = (key: string) => path.join(PROFILE_DIR, key === DEFAULT_KEY ? "resume.md" : `resume-${key}.md`);
+export const mdFile = (key: string) => path.join(PROFILE_DIR, key === DEFAULT_KEY ? "resume.md" : `resume-${key}.md`);
+/** Body of a base resume without its optional first-line `<!-- label: … -->` comment. */
+export const stripLabel = (md: string) => md.replace(/^\s*<!--\s*label:.*?-->\s*\n?/i, "");
 const keyOf = (file: string) => { const m = /^resume(?:-([\w.]+))?\.(md|pdf|docx)$/i.exec(file); return m ? (m[1]?.toLowerCase() ?? DEFAULT_KEY) : null; };
 const safeKey = (k: string) => k.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30);
 
@@ -46,7 +48,7 @@ export const hasAnyResume = () => importedResumes().length > 0;
 export async function loadResume(key: string = DEFAULT_KEY): Promise<string> {
   const k = key && importedResumes().some((r) => r.key === key) ? key : (fs.existsSync(mdFile(key || DEFAULT_KEY)) ? key || DEFAULT_KEY : DEFAULT_KEY);
   const md = mdFile(k);
-  if (fs.existsSync(md)) return fs.readFileSync(md, "utf8").replace(/^\s*<!--\s*label:.*?-->\s*\n?/i, "");
+  if (fs.existsSync(md)) return stripLabel(fs.readFileSync(md, "utf8"));
   return importResume(k);
 }
 
@@ -68,7 +70,7 @@ export async function importResume(key: string = DEFAULT_KEY): Promise<string> {
 export function saveResume(key: string, md: string, label?: string) {
   const k = safeKey(key);
   if (!k) throw new Error("Give the base a short name, e.g. platform");
-  const body = md.replace(/^\s*<!--\s*label:.*?-->\s*\n?/i, "");
+  const body = stripLabel(md);
   fs.writeFileSync(mdFile(k), (label?.trim() ? `<!-- label: ${label.trim()} -->\n` : "") + body);
   return k;
 }
