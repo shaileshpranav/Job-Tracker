@@ -19,6 +19,7 @@ import { HttpError, readJson, send } from "./http.ts";
 import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf, createApplication } from "./jobs.ts";
+import { autofillBookmarklet, candidateContact } from "./autofill.ts";
 import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, applyFilters, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
 import { preflight, tasksFor, queueJob } from "./preflight.ts";
 import { pdfFileName, candidateName, DEFAULT_PDF_NAME } from "./filenames.ts";
@@ -77,6 +78,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) return send(res, 200, fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8"), "text/html");
   if (req.method === "GET" && url.pathname === "/app.js") return send(res, 200, fs.readFileSync(path.join(PUBLIC, "app.js"), "utf8"), "text/javascript");
   if (req.method === "GET" && url.pathname === "/favicon.ico") { res.writeHead(204); return res.end(); }
+  if ((r = m("GET", /^\/fonts\/([\w.-]+\.(?:woff2|css))$/))) {
+    // Self-hosted typefaces (src/public/fonts): immutable files, so let the browser cache them.
+    const file = path.join(PUBLIC, "fonts", r[1]);
+    if (!fs.existsSync(file)) throw new HttpError(404, "Not found");
+    res.writeHead(200, { "content-type": file.endsWith(".css") ? "text/css" : "font/woff2", "cache-control": "public, max-age=31536000, immutable" });
+    return res.end(fs.readFileSync(file));
+  }
 
   // Bookmarklet: run on a job page in your normal (logged-in) browser. It opens
   // the app and POSTs the rendered page text here; the app page then picks it
@@ -460,6 +468,24 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     if (process.platform === "darwin") spawn("open", [dir], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
     return send(res, 200, { ok: process.platform === "darwin", path: dir, files });
   }
+  // Autofill: a per-application bookmarklet (same pattern as the capture one) that fills your
+  // contact info and this application's saved Q&A answers into the form on the page you're on.
+  if ((r = m("GET", /^\/api\/applications\/(\d+)\/autofill-bookmarklet$/))) {
+    const app = mustApp(r[1]);
+    const origin = `http://${req.headers.host}`;
+    return send(res, 200, { href: `javascript:${encodeURIComponent(autofillBookmarklet(origin, app.id))}`, origin });
+  }
+  if (req.method === "OPTIONS" && /^\/api\/applications\/\d+\/autofill$/.test(url.pathname)) {
+    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type", "access-control-allow-methods": "GET" });
+    return res.end();
+  }
+  if ((r = m("GET", /^\/api\/applications\/(\d+)\/autofill$/))) {
+    const app = mustApp(r[1]);
+    const questions = db.prepare("SELECT question, answer FROM questions WHERE application_id = ? AND answer IS NOT NULL AND trim(answer) != ''").all(app.id);
+    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+    return res.end(JSON.stringify({ contact: candidateContact(app.resume_key), questions }));
+  }
+
   // ATS keyword check: deterministic comparison of a document (or a base resume) with the posting
   if ((r = m("GET", /^\/api\/applications\/(\d+)\/ats$/))) {
     const app = mustApp(r[1]);

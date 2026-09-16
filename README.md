@@ -18,13 +18,13 @@ npm start                    # http://localhost:4321
 
 ## Capturing postings that block scrapers (LinkedIn, Workday, …)
 
-The home screen has a **📌 Save to Job Tracker** bookmarklet. Drag it to your bookmarks bar; click it while viewing a posting in your normal, logged-in browser. It sends the page *as rendered* to the app (which must be running) and opens the new application — no scraping, so nothing gets blocked. The original page text is kept with the application, so **↻ Re-extract** on the Job tab can re-run extraction later with a better model, and **↻ Fetch again** re-scrapes the URL. Entries that look thin (no location/requirements) get a hint banner pointing at these.
+The home screen has a **Save to Job Tracker** bookmarklet. Drag it to your bookmarks bar; click it while viewing a posting in your normal, logged-in browser. It sends the page *as rendered* to the app (which must be running) and opens the new application — no scraping, so nothing gets blocked. The original page text is kept with the application, so **↻ Re-extract** on the Job tab can re-run extraction later with a better model, and **↻ Fetch again** re-scrapes the URL. Entries that look thin (no location/requirements) get a hint banner pointing at these.
 
 ## Getting around
 
 - **Sidebar nav** (desktop) / **bottom bar** (phone): Home · Feed · Goals · Tasks · Settings — badges show hot feed postings and running tasks. On a phone there's also **Apps** for the list, since Home is the dashboard.
 - **Home** is a dashboard: a setup checklist until everything's configured, today's numbers (applied vs goal, follow-ups due, hot postings, running tasks), what needs attention, and recent activity; the bookmarklet, answer bank and backups live in collapsible sections below.
-- The list can be sorted (Recent · Fit · Applied · A–Z) and filtered by status or ⏰ follow-ups; rows carry a colour bar for the stage.
+- The list can be sorted (Recent · Fit · Applied · A–Z) and filtered by status or due follow-ups; each row carries a stage marker and rail that darken as the application moves through the pipeline (saved is an outline, offer is green, rejected rust).
 - Keyboard: `n` new, `/` search, `j`/`k` next/previous application, `1`–`6` tabs, `⌘S` save, `Esc` back, `?` for the list. **`⌘K`** opens a palette to jump to any application, view, settings section or action. In the feed, `j`/`k` move a highlight and `t` / `x` / `o` / `s` track, remove, open the posting or score the highlighted one.
 - **Undo instead of dialogs**: deleting an application, removing an answer or a feed posting happens immediately with an *Undo* in the notice; the server change follows a few seconds later (or not at all if you undo).
 - On a phone the application header folds: one status chip (tap to change) and a one-line summary of dates, next action and notes (tap *edit* to open the controls). A next action that is due shows in amber, in the header and the list.
@@ -33,7 +33,7 @@ The home screen has a **📌 Save to Job Tracker** bookmarklet. Drag it to your 
 
 ## Appearance
 
-Follows your system light/dark setting; the ◐ button at the bottom of the sidebar overrides it (remembered per browser). All colours come from CSS tokens at the top of `src/public/index.html`.
+Follows your system light/dark setting; the half-circle button at the bottom of the sidebar overrides it (remembered per browser). All colours come from CSS tokens at the top of `src/public/index.html`; the stage ramp is `--st-saved` … `--st-withdrawn`. Type is IBM Plex (Sans for the interface, Serif for the names of things, Mono for dates and file names), served from `src/public/fonts/` so nothing is fetched from the network.
 
 ## Using it from your phone
 
@@ -41,7 +41,7 @@ The UI is responsive — on a phone the list and the application detail become s
 
 ## Security
 
-The server has no login by default and listens on all interfaces, so on shared Wi-Fi anyone on the network can open it. Set `AUTH_PASSWORD` in `.env`, or add a password from **⚙ Settings → Security** once it's running, to require one — a session then lasts 30 days per browser (**⎋** in the sidebar logs out). Saved LLM API keys are encrypted at rest in `data/tracker.db` with a key generated on first run at `data/secret.key`; back both files up together, since losing the key file just means re-pasting keys in Settings, not losing the tracker data.
+The server has no login by default and listens on all interfaces, so on shared Wi-Fi anyone on the network can open it. Set `AUTH_PASSWORD` in `.env`, or add a password from **Settings → Security** once it's running, to require one — a session then lasts 30 days per browser (the log-out button at the bottom of the sidebar ends it). Saved LLM API keys are encrypted at rest in `data/tracker.db` with a key generated on first run at `data/secret.key`; back both files up together, since losing the key file just means re-pasting keys in Settings, not losing the tracker data.
 
 ## Settings
 
@@ -49,7 +49,7 @@ Settings is split into sections (list on the left; a chip row on phones): **Mode
 
 ## Choosing a model
 
-Open **⚙ Settings** in the app: pick a provider, paste its API key (stored locally in `data/tracker.db`, takes effect immediately), and choose a model from the searchable list. `.env` values (`LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_HOST`) act as defaults; anything set in the app wins.
+Open **Settings** in the app: pick a provider, paste its API key (stored locally in `data/tracker.db`, takes effect immediately), and choose a model from the searchable list. `.env` values (`LLM_PROVIDER`, `LLM_MODEL`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_HOST`) act as defaults; anything set in the app wins.
 
 | Provider | Needs | Notes |
 |---|---|---|
@@ -69,14 +69,14 @@ On first visit, click **Import resume** to convert your PDF/DOCX into `profile/r
 
 Some postings sit behind a Cloudflare check, a CAPTCHA, or a sign-in wall. The app **never tries to solve or bypass these**. It detects the challenge, parks the task as **waiting**, and shows a card with the site and the reason. You open the posting in your own browser, clear the check yourself, then hand the page over either way:
 
-- click the 📌 **Save to Job Tracker** bookmarklet on the cleared page — the waiting task for that site resumes automatically with what you saw, or
+- click the **Save to Job Tracker** bookmarklet on the cleared page — the waiting task for that site resumes automatically with what you saw, or
 - paste the page text into the card.
 
 There is also **I've cleared it — try again**, which simply re-fetches (useful after a rate limit passes). The page text you hand over is stored with the task, so a retry does not need to fetch again.
 
 ## Goals, streaks and achievements
 
-The 🎯 bar under the sidebar header shows today's progress and your streak; click it for the **Goals** view. Set targets per day / week / month (0 = ignore) and whether weekends count — with weekends off, Saturday and Sunday are rest days that don't break a streak. Everything is derived from each application's **applied** date (set automatically when you move a card to *applied*, or edit it in the header), so correcting a date recomputes it all.
+The goal bar under the sidebar header shows today's progress and your streak; click it for the **Goals** view. Set targets per day / week / month (0 = ignore) and whether weekends count — with weekends off, Saturday and Sunday are rest days that don't break a streak. Everything is derived from each application's **applied** date (set automatically when you move a card to *applied*, or edit it in the header), so correcting a date recomputes it all.
 
 - **Rings** for today, this week (Mon–Sun) and this month.
 - **Streak** — consecutive days hitting the daily target (still alive if yesterday hit and today is in progress); best streak is kept.
@@ -86,7 +86,7 @@ The 🎯 bar under the sidebar header shows today's progress and your streak; cl
 
 ## Job feed
 
-📡 in the sidebar. Sources are official JSON endpoints — no HTML scraping:
+**Feed** in the sidebar. Sources are official JSON endpoints — no HTML scraping:
 
 - **Company boards** — paste any careers URL (or just the company's site) into **Find board** and the app resolves it to `greenhouse:<token>`, `lever:<token>`, `ashby:<token>`, `workable:<account>` or `smartrecruiters:<Company>`, checks it responds, and shows sample titles before you add it. JS-rendered careers pages are handled by trying the company's domain name as the token (flagged as a guess — check the titles).
 - **Aggregators** — Arbeitnow (Europe), RemoteOK, Remotive, **HN "Who is hiring"** (the monthly thread, one posting per comment), The Muse, Himalayas, Jobicy, and Adzuna (free key; covers Singapore, Germany, UK, US and more — countries are derived from your locations).
@@ -101,7 +101,9 @@ Storage folders can be moved with `DATA_DIR`, `APPLICATIONS_DIR`, `PROFILE_DIR` 
 
 ## Applying
 
-**🚀 Apply** in an application's header opens the apply pack: the current resume and cover letter PDFs with their real page counts (a ✗ and a Generate button if one is missing), **Copy all answers** (every question and answer as plain text, for ATS forms), and **Show in Finder**, which rebuilds any stale PDF, writes `questions.md`, and opens the application's folder so you can drag files into the upload fields. Below that, *Applied on* (today) and *Follow up on* (today + the Goals nudge, default 7 days; left empty when the nudge is 0) are prefilled; **✓ Mark as applied** sets the status, dates and next action in one go. After that the same button reads *📦 Apply pack* so the files stay one click away.
+**Apply** in an application's header opens the apply pack: the current resume and cover letter PDFs with their real page counts (a ✗ and a Generate button if one is missing), **Copy all answers** (every question and answer as plain text, for ATS forms), an **Autofill** bookmarklet, and **Show in Finder**, which rebuilds any stale PDF, writes `questions.md`, and opens the application's folder so you can drag files into the upload fields. Below that, *Applied on* (today) and *Follow up on* (today + the Goals nudge, default 7 days; left empty when the nudge is 0) are prefilled; **✓ Mark as applied** sets the status, dates and next action in one go. After that the same button reads *📦 Apply pack* so the files stay one click away.
+
+**Autofill** — same bookmarklet mechanism as **Save to Job Tracker**, but per-application: drag *Fill this application* to your bookmarks bar, then click it on the company's actual application form. It reads your name/email/phone/LinkedIn/GitHub/site off your base resume's header and matches this application's saved question answers to nearby form fields by label text, filling only what it's confident about (highlighted in the accent colour) and leaving the rest for you — nothing is guessed or invented, and empty fields are never overwritten.
 
 ## Capturing the same posting twice
 
@@ -113,7 +115,7 @@ Every queued task (one hook in front of the queue, so no route can forget it) ch
 
 ## Follow-ups, notes and interview prep
 
-- **Next action** — each application has a date + note in its header; when the date arrives it shows ⏰ in the list and under the **follow up** filter. Applications sitting in *applied*/*screening* with no reply for N days (Goals → "nudge me after", default 7) are flagged the same way. **✓ Followed up** logs it and clears the flag; ☎ Call / 🤝 Interview log those.
+- **Next action** — each application has a date + note in its header; when the date arrives it shows as due in the list and under the **follow up** filter. Applications sitting in *applied*/*screening* with no reply for N days (Goals → "nudge me after", default 7) are flagged the same way. **✓ Followed up** logs it and clears the flag; ☎ Call / 🤝 Interview log those.
 - **Timeline** — add free-text notes (recruiter names, what was said); hand-logged entries can be removed.
 - **Prep tab** — generates an interview prep sheet for *this* role: positioning pitch, likely questions with talking points from your own experience, how to handle the gaps the fit score found, STAR stories to have ready, and questions to ask them. Saved as `interview-prep.md`.
 - **Compare** (Resume / Cover letter tabs) — line diff of the current version against the base resume or any earlier version; the fastest way to spot anything the model invented or dropped.
@@ -144,11 +146,11 @@ Every captured posting is scored 1–5 against `profile/resume.md` in the backgr
 - **File names.** Exported PDFs are named for the recruiter: `Shailesh-Pranav-Rajendran-Resume.pdf` / `…-Cover-Letter.pdf`, with the name taken from the heading of the base resume the application uses (ALL CAPS is title-cased). The pattern is editable in **Settings → Documents** with `{name}`, `{kind}` and `{company}` placeholders (`{kind}` is appended if a pattern omits it, so a resume and cover letter never share a file); the same name is used for the file in the application folder, the download, and the browser print fallback's suggested name. The apply pack shows the exact name next to each document.
 - **PDF export via LaTeX.** Markdown stays the source of truth; `src/latex.ts` converts it deterministically (no model in the loop, so nothing can break the TeX) into `templates/resume.tex` / `templates/letter.tex` and compiles with `xelatex` via `latexmk`. Needs MacTeX or BasicTeX (`brew install --cask basictex`); without it the app falls back to browser print. Edit the templates to change the look; `/doc/<id>.tex` shows the generated TeX if you want to tweak by hand in Overleaf.
 - **LaTeX mode** on a document tab shows the full generated `.tex`; edit spacing/margins/font size and **Save & rebuild PDF** — the page count updates from the real compile. "Reset to generated" goes back to the Markdown-derived TeX; saving Markdown edits also regenerates it. **Settings → Documents → PDF templates** edits the global templates instead.
-- **🎓 Learn format from my edits** — after you edit and save a generated resume or cover letter, this compares your version with the generated one and updates a short list of *formatting* rules (section order/names, bullet style, date format, length, tone, sign-offs…) that every future document follows. Content changes — facts, skills, employers, job-specific wording — are deliberately ignored. Rules live under **Settings → Documents → Learned formatting preferences**, per document type, and are editable/clearable.
+- **Learn my format** — after you edit and save a generated resume or cover letter, this compares your version with the generated one and updates a short list of *formatting* rules (section order/names, bullet style, date format, length, tone, sign-offs…) that every future document follows. Content changes — facts, skills, employers, job-specific wording — are deliberately ignored. Rules live under **Settings → Documents → Learned formatting preferences**, per document type, and are editable/clearable.
 - **Instructions for the next draft** — the box under Generate takes free text (*"shorter"*, *"lead with the Monta work"*, *"mention I'm open to relocating"*) and passes it to the model for that draft; on the Resume tab, **Resume + cover letter** applies it to both. It outranks the learned formatting rules but never the honesty rules. The instructions are stored with the version they produced (shown as a ✎ pill and in the timeline), and the box stays prefilled so you can iterate; Condense carries them over.
 - **Unsaved edits are never lost.** Switching tabs, view modes or applications while editing Markdown, LaTeX, job details or an answer keeps the edit as a draft (persisted in the browser, so it survives a reload); the tab shows ✎ and the document a "You have unsaved edits — Continue editing / Discard" banner. A field with a draft has an amber border and its Save button lights up. Drafts clear when you save or discard; **Cancel** on the job-details form discards. An edit made to a version that a regenerate has since replaced is kept too — the tab offers to restore it into the current version's editor or discard it. The same applies to a half-written New application form.
 - **Versions.** Every generate, condense, restore and save keeps the earlier text. The `vN of M ▾` chip on a document lists them; **View** shows an earlier version (preview, PDF, compare, copy) and **↩ Restore as vM+1** brings it back as the newest — nothing is ever overwritten.
-- **✂ Condense to one page** on the Resume tab asks the model to cut the current version down (saved as a new version, so nothing is lost).
+- **Condense to one page** on the Resume tab asks the model to cut the current version down (saved as a new version, so nothing is lost).
 - Generated resumes are constrained to **one page**: the draft is compiled, and if the real page count is > 1 an automatic condense pass trims it and recompiles. The Resume tab shows `N page(s) (PDF)` from the actual compile; without LaTeX it falls back to a word/line heuristic.
 - Resume and cover-letter tabs default to a rendered **Preview**; **PDF** shows the compiled page inline (compiling it first if needed, with the build error shown if LaTeX fails); switch to **Edit** to change the Markdown, then Save.
 - **⎘ Copy text** (Export) copies the document as plain text — headings and emphasis markers dropped, bullets kept — for application forms that want the cover letter or resume pasted in. The Questions tab and the apply pack have **Copy all answers**.
