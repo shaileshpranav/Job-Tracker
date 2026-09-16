@@ -2,7 +2,7 @@ import http from "node:http";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { db, getApp, logEvent, touch, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
+import { db, getApp, logEvent, touch, saveDocument, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
 import { resumeSize, ONE_PAGE } from "./ai.ts";
 import { renderTex, contentHash, readTemplate, writeTemplate } from "./latex.ts";
 import { listPrompts, savePrompt } from "./prompts.ts";
@@ -18,7 +18,7 @@ import { spawn } from "node:child_process";
 import { HttpError, readJson, send } from "./http.ts";
 import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
-import { hostOf } from "./jobs.ts";
+import { hostOf, createApplication } from "./jobs.ts";
 import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, applyFilters, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
 import { preflight, tasksFor, queueJob } from "./preflight.ts";
 import { pdfFileName, candidateName, DEFAULT_PDF_NAME } from "./filenames.ts";
@@ -234,6 +234,21 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const label = body.company || body.title ? `Capture — ${body.company || body.title}` : `Capture — ${body.url}`;
     const { force: _force, ...payload } = body;
     return send(res, 202, { job: await queueJob("capture", label.slice(0, 80), payload) });
+  }
+  // Logged by hand, no model involved — Easy Apply, a referral, something applied to before the tracker existed.
+  if (m("POST", /^\/api\/applications\/manual$/)) {
+    const body = await readJson(req);
+    const company = String(body.company ?? "").trim(), role = String(body.role ?? "").trim();
+    if (!company || !role) throw new HttpError(400, "Company and role are required");
+    const urlStr = String(body.url ?? "").trim() || null;
+    const dup = body.force ? null : findDuplicate(urlStr, company, role);
+    if (dup) return send(res, 409, { error: `You already track this: ${dup.company} · ${dup.role} (${dup.status}).`, existing: dup });
+    const status = STATUSES.includes(body.status) ? body.status : "saved";
+    const applied = /^\d{4}-\d{2}-\d{2}$/.test(String(body.applied_at ?? "")) ? String(body.applied_at) : null;
+    const app = createApplication({ company, role, location: String(body.location ?? "").trim(), salary: String(body.salary ?? "").trim(), description: String(body.description ?? "").trim(), requirements: [], application_questions: [] } as any, urlStr, "", "Logged by hand");
+    db.prepare("UPDATE applications SET status = ?, applied_at = ?, notes = ? WHERE id = ?").run(status, status === "saved" ? null : applied ?? today(), String(body.notes ?? ""), app.id);
+    if (status !== "saved") logEvent(app.id, "status", `saved → ${status}`);
+    return send(res, 200, appDetail(getApp(app.id)!));
   }
   if ((r = m("GET", /^\/api\/applications\/(\d+)$/))) return send(res, 200, appDetail(mustApp(r[1])));
   if ((r = m("PATCH", /^\/api\/applications\/(\d+)$/))) {
@@ -471,6 +486,18 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     let pdfError: string | null = null;
     if (isLatexReady()) await buildPdf(doc.id).catch((e) => { pdfError = e.message; });
     return send(res, 200, { ok: true, pdfError, texReset: doc.tex !== null });
+  }
+  if ((r = m("POST", /^\/api\/documents\/(\d+)\/restore$/))) {
+    const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(Number(r[1])) as any;
+    if (!doc) throw new HttpError(404, "Document not found");
+    const app = mustApp(String(doc.application_id));
+    const n = (db.prepare("SELECT COUNT(*) AS n FROM documents WHERE application_id = ? AND kind = ? AND id <= ?").get(app.id, doc.kind, doc.id) as any).n;
+    const id = saveDocument(app, doc.kind, doc.content, doc.instructions);
+    const total = (db.prepare("SELECT COUNT(*) AS n FROM documents WHERE application_id = ? AND kind = ?").get(app.id, doc.kind) as any).n;
+    logEvent(app.id, "edited", `${doc.kind === "resume" ? "Resume" : "Cover letter"} v${n} restored as v${total}`);
+    let pdfError: string | null = null;
+    if (isLatexReady()) await buildPdf(id).catch((e) => { pdfError = e.message; });
+    return send(res, 200, { ...appDetail(getApp(app.id)!), restored: id, pdfError });
   }
   // hand-editable LaTeX per document
   if ((r = m("GET", /^\/api\/documents\/(\d+)\/tex$/))) {

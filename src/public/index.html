@@ -246,6 +246,26 @@
   .settings-nav button span:first-child { width:20px; text-align:center; } .settings-nav button:hover { background:var(--panel-2); color:var(--ink); } .settings-nav button.on { background:var(--accent-soft); color:var(--accent-soft-ink); }
   .settings-nav .pill, .settings-nav .dot-mark { margin-left:auto; } .dot-mark { width:8px; height:8px; border-radius:50%; display:inline-block; } .dot-mark.bad { background:var(--bad); } .dot-mark.warn { background:var(--warn); }
   .settings-body > .card:last-child { margin-bottom:0; }
+  /* command palette */
+  .overlay .pal { width:min(560px, 92vw); padding:10px; align-self:flex-start; margin-top:12vh; }
+  .pal input { width:100%; font-size:15px; padding:10px 12px; margin-bottom:6px; }
+  .pal-row { display:flex; gap:10px; align-items:center; padding:8px 10px; border-radius:var(--radius-s); cursor:pointer; font-size:13px; } .pal-row.on { background:var(--accent-soft); } .pal-row .ic { width:22px; text-align:center; } .pal-row .sp { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .pal-row small { color:var(--mute); }
+  .pal-hint { font-size:11px; padding:6px 10px 2px; } .pal-hint kbd { margin-right:4px; }
+  /* header on phones, due next action */
+  .status-cur { border-radius:99px; padding:4px 12px; font-size:12px; background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .status-cur.interview, .status-cur.offer { background:var(--ok); border-color:var(--ok); color:#fff; } .status-cur.rejected, .status-cur.withdrawn { background:var(--bad); border-color:var(--bad); color:#fff; }
+  .head-summary { display:block; width:100%; text-align:left; background:var(--panel-2); border:1px solid var(--line-2); border-radius:var(--radius-s); padding:8px 10px; font-size:13px; line-height:1.5; white-space:normal; margin-top:8px; }
+  .head-meta label.due { color:var(--warn); font-weight:600; } .head-meta label.due input { border-color:var(--warn); }
+  .head-title { flex:1; min-width:0; } #delBtn { flex:none; }
+  .preview.desc { max-width:78ch; font-size:14px; line-height:1.55; } .preview.desc p, .preview.desc li { margin:0 0 8px; } .preview.desc h1, .preview.desc h2, .preview.desc h3 { font-size:14px; margin:14px 0 6px; }
+  /* versions */
+  .versions { display:inline-block; position:relative; } .versions summary { cursor:pointer; font-weight:600; color:var(--ink); list-style:none; } .versions summary::-webkit-details-marker { display:none; }
+  .versions-list { position:absolute; z-index:6; top:calc(100% + 6px); left:0; min-width:360px; max-width:90vw; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-s); box-shadow:var(--shadow); padding:6px; }
+  .version-row { display:flex; gap:8px; align-items:center; padding:6px 8px; border-radius:var(--radius-s); font-size:13px; } .version-row.cur { background:var(--accent-soft); } .version-row .sp { flex:1; } .version-row button { padding:3px 9px; font-size:12px; }
+  /* feed keyboard cursor */
+  .feed-item.cur { outline:2px solid var(--accent); outline-offset:-2px; }
+  /* notice with an action */
+  .notice { display:flex; gap:12px; align-items:center; } .notice span { flex:1; } .notice button { background:var(--bg); color:var(--ink); border:0; padding:4px 12px; font-weight:600; }
   /* apply panel */
   .apply { background:var(--panel-2); border:1px solid var(--line-2); border-radius:var(--radius-s); padding:10px 14px 12px; margin:0 0 6px; }
   .apply-row { display:flex; gap:10px; align-items:center; padding:7px 0; border-top:1px solid var(--line-2); font-size:13px; } .apply-row .sp { flex:1; }
@@ -278,6 +298,8 @@
     .fitgrid { grid-template-columns:1fr; } .task-row { grid-template-columns:1fr; }
     .doc-group > div { flex-wrap:wrap; }
     .apply-row { flex-wrap:wrap; } .apply-done input#applyNextTxt { width:100%; }
+    .versions-list { position:fixed; left:12px; right:12px; top:auto; min-width:0; }
+    .toolbar.head-row { flex-wrap:nowrap; align-items:flex-start; } .toolbar.head-row > div:first-child { flex-basis:0; flex:1; }
     .settings { grid-template-columns:1fr; gap:10px; } .settings-nav { position:static; flex-direction:row; overflow-x:auto; scrollbar-width:none; padding-bottom:2px; }
     .settings-nav button { width:auto; white-space:nowrap; flex:none; min-height:36px; } .settings-nav button span:first-child { width:auto; }
   }
@@ -300,13 +322,22 @@
 </div>
 <nav class="bottomnav" id="bottomnav"></nav>
 <div id="busyPill" class="busy-pill" hidden></div>
+<div id="palette" class="overlay" hidden>
+  <div class="card pal">
+    <input id="palQ" placeholder="Jump to an application, a view, or an action…" autocomplete="off" spellcheck="false">
+    <div id="palList"></div>
+    <div class="muted pal-hint"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>↩</kbd> open · <kbd>esc</kbd> close</div>
+  </div>
+</div>
 <div id="helpOverlay" class="overlay" hidden>
   <div class="card help">
     <div class="toolbar"><h3 style="margin:0">Keyboard shortcuts</h3><div class="sp"></div><button class="ghost icon" id="helpClose">×</button></div>
     <table>
       <tr><td><kbd>n</kbd></td><td>New application</td></tr>
       <tr><td><kbd>/</kbd></td><td>Search applications</td></tr>
-      <tr><td><kbd>j</kbd> <kbd>k</kbd></td><td>Next / previous application</td></tr>
+      <tr><td><kbd>j</kbd> <kbd>k</kbd></td><td>Next / previous application (in the feed: move between postings)</td></tr>
+      <tr><td><kbd>t</kbd> <kbd>x</kbd> <kbd>o</kbd> <kbd>s</kbd></td><td>Feed: track · remove · open the posting · score the highlighted one</td></tr>
+      <tr><td><kbd>⌘K</kbd></td><td>Jump to an application or a view</td></tr>
       <tr><td><kbd>1</kbd>–<kbd>6</kbd></td><td>Switch tab (Job, Resume, Cover letter, Questions, Prep, Timeline)</td></tr>
       <tr><td><kbd>⌘S</kbd></td><td>Save the open editor</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>Back to the dashboard / close</td></tr>
