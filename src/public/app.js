@@ -2,6 +2,51 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// ---------- icons: one monochrome line set, inherits the text colour ----------
+const ICONS = {
+  home: '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  feed: '<path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.2" fill="currentColor" stroke="none"/>',
+  goals: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1" fill="currentColor"/>',
+  tasks: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  settings: '<path d="M4 7h9M18 7h2M4 17h4M13 17h7"/><circle cx="15.5" cy="7" r="2.2"/><circle cx="10.5" cy="17" r="2.2"/>',
+  apps: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/>',
+  model: '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+  routes: '<path d="M3 12h5l3-4h3M3 12h5l3 4h3"/><path d="M14 8h6m-2.5-2.5L20 8l-2.5 2.5M14 16h6m-2.5-2.5L20 16l-2.5 2.5"/>',
+  guard: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+  resume: '<path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+  documents: '<path d="M15 3H9a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V8z"/><path d="M15 3v5h4M5 8v12a1 1 0 0 0 1 1h9"/>',
+  prompts: '<path d="M4 5h16v11H9l-5 4z"/>',
+  security: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  flame: '<path d="M12 2.5c.8 3.2 4.8 5.2 4.8 9.7a4.8 4.8 0 0 1-9.6 0c0-1.9.8-3.4 1.9-4.6.3 1.4 1 2.3 2.1 2.5C10.2 7.6 10.3 5 12 2.5z"/><path d="M12 21a2.6 2.6 0 0 1-2.6-2.6c0-1.3 1-2 1.4-3 .4 1 1.6 1.5 1.6 3A2.6 2.6 0 0 1 12 21z" fill="currentColor" stroke="none" opacity=".35"/>',
+  pin: '<path d="M7 3h10v18l-5-4-5 4z"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  send: '<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>',
+  package: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
+  sparkle: '<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z"/>',
+  cap: '<path d="M2 9l10-4 10 4-10 4z"/><path d="M6 11v5c0 1.5 3 3 6 3s6-1.5 6-3v-5M22 9v5"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-4 3-6 7-6s7 2 7 6"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M22 20c0-3-2-5-5-5.5"/>',
+  phone: '<path d="M5 3h4l2 5-2.5 1.5a11 11 0 0 0 6 6L16 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 5a2 2 0 0 1 2-2z"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
+  folder: '<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>',
+  question: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 1-1 1.7M12 17h.01"/>',
+  pen: '<path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M13 7l3 3"/>',
+  scissors: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8 7.5L20 18M8 16.5L20 6"/>',
+  warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>',
+  refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  theme: '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/>',
+  note: '<path d="M4 20h16M4 16l10-10 3 3L7 19z"/>',
+  check: '<path d="M5 12l4 4L19 7"/>',
+  logout: '<path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h5M15 8l4 4-4 4M9 12h10"/>',
+  back: '<path d="M19 12H5M11 5l-7 7 7 7"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+};
+const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+
 const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: false, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null, settingsSection: "model", newMode: "capture", viewDoc: null, headOpen: false, statusOpen: false, feedCursor: -1, noticeAction: null, pendingDeletes: new Set() };
 try { state.atsOpen = localStorage.getItem("atsOpen") === "1"; } catch { state.atsOpen = false; }
 try { state.settingsSection = localStorage.getItem("settingsSection") || "model"; } catch {}
@@ -188,7 +233,7 @@ async function refreshJobs() {
     const was = prev.get(j.id);
     if (!was) continue;
     if ((was === "queued" || was === "running") && (j.status === "done" || j.status === "error")) await onJobFinished(j);
-    else if (was !== "waiting" && j.status === "waiting") notify(`⚠ ${j.label} needs you — ${needOf(j).reason || "see Tasks"}`);
+    else if (was !== "waiting" && j.status === "waiting") notify(`${j.label} needs you — ${needOf(j).reason || "see Tasks"}`);
   }
 }
 
@@ -235,9 +280,9 @@ function jobRow(j, compact) {
   const t = (s) => fmtTime(s);
   const secs = (a, b) => Math.max(1, Math.round((Date.parse(b.replace(" ", "T") + "Z") - Date.parse(a.replace(" ", "T") + "Z")) / 1000));
   const dur = j.started_at && j.finished_at ? `${secs(j.started_at, j.finished_at)}s` : "";
-  const icon = { queued: "◦", running: '<span class="spinner"></span>', waiting: '<span style="color:var(--warn)">⚠</span>', done: '<span style="color:var(--ok)">✓</span>', error: '<span style="color:var(--bad)">✗</span>', cancelled: '<span class="muted">–</span>' }[j.status];
+  const mark = { queued: "◦", running: '<span class="spinner"></span>', waiting: `<span style="color:var(--warn)">${icon("warn")}</span>`, done: '<span style="color:var(--ok)">✓</span>', error: '<span style="color:var(--bad)">✗</span>', cancelled: '<span class="muted">–</span>' }[j.status];
   return `<div class="job ${j.status}" data-job="${j.id}">
-    <span class="job-icon">${icon}</span>
+    <span class="job-icon">${mark}</span>
     <div class="job-main"><b>${esc(j.label)}</b>
       <div class="muted">${j.status === "running" ? esc(j.progress || "Working…") : j.status === "queued" ? "Queued" : j.status === "waiting" ? `<span style="color:var(--warn)">Waiting for you — ${esc(needOf(j).reason || "needs input")}</span>` : j.status === "error" ? `<span class="err">${esc(j.error || "failed")}</span>` : j.status}${dur ? ` · ${dur}` : ""}${compact ? "" : ` · ${t(j.created_at)}`}</div></div>
     <div class="job-actions">
@@ -256,7 +301,7 @@ function renderNeedsYou() {
     const n = needOf(j);
     const open = state.pasteFor === j.id;
     return `<div class="card needs" data-need="${j.id}">
-      <div class="toolbar" style="margin-bottom:6px"><h3 style="margin:0">⚠ ${esc(j.label)} needs you</h3><div class="sp"></div><span class="muted">${esc(n.host || "")}</span></div>
+      <div class="toolbar" style="margin-bottom:6px"><h3 style="margin:0">${icon("warn")} ${esc(j.label)} needs you</h3><div class="sp"></div><span class="muted">${esc(n.host || "")}</span></div>
       <p style="margin:0 0 10px">${esc(n.message || "This task is waiting for input.")} Open the posting, clear the check yourself, then hand the page over — the app doesn't try to get past these.</p>
       <div class="toolbar" style="margin:0">
         ${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener"><button class="primary">Open the posting ↗</button></a>` : ""}
@@ -267,8 +312,8 @@ function renderNeedsYou() {
       </div>
       ${open ? `<div style="margin-top:10px">
         <textarea id="pasteText" placeholder="Select the whole posting page (⌘A, ⌘C) and paste it here…" style="min-height:140px"></textarea>
-        <div class="toolbar" style="margin:8px 0 0"><button class="primary" data-paste-save="${j.id}">Use this text</button><span class="muted">Or click the 📌 bookmarklet on the cleared page — it resumes this task automatically.</span></div>
-      </div>` : `<p class="muted" style="margin:8px 0 0">Tip: with the 📌 Save to Job Tracker bookmarklet on your bookmarks bar, one click on the cleared page hands it over and resumes this task.</p>`}
+        <div class="toolbar" style="margin:8px 0 0"><button class="primary" data-paste-save="${j.id}">Use this text</button><span class="muted">Or click the Save to Job Tracker bookmarklet on the cleared page — it resumes this task automatically.</span></div>
+      </div>` : `<p class="muted" style="margin:8px 0 0">Tip: with the Save to Job Tracker bookmarklet on your bookmarks bar, one click on the cleared page hands it over and resumes this task.</p>`}
     </div>`;
   }).join("");
 }
@@ -289,37 +334,37 @@ function renderFeed() {
   if (state.feedFilter === "hot") items = items.filter((i) => i.status === "new" && i.fit_score >= st.minScore);
   if (state.feedFilter === "unscored") items = items.filter((i) => i.fit_score == null);
   const configured = st.boards.length || Object.values(st.aggregators).some(Boolean);
-  const chips = [["hot", `🔥 Hot ${c.hot}${c.unseen_hot ? ` <span class="tb">${c.unseen_hot} new</span>` : ""}`], ["open", `All open ${c.open}`], ["unscored", `Unscored ${c.unscored}`], ["tracked", "Tracked"], ["dismissed", "Dismissed"], ...(c.hidden ? [["hidden", `Hidden by filters ${c.hidden}`]] : [])];
+  const chips = [["hot", `${icon("flame")} Hot ${c.hot}${c.unseen_hot ? ` <span class="tb">${c.unseen_hot} new</span>` : ""}`], ["open", `All open ${c.open}`], ["unscored", `Unscored ${c.unscored}`], ["tracked", "Tracked"], ["dismissed", "Dismissed"], ...(c.hidden ? [["hidden", `Hidden by filters ${c.hidden}`]] : [])];
   const dots = (n) => n == null ? '<span class="muted" title="Not scored yet">–</span>' : `<span class="dots small">${[1,2,3,4,5].map((i) => `<span class="dot ${i <= n ? "on f" + n : ""}"></span>`).join("")}</span>`;
   const atsChip = (i) => i.ats_pct == null ? "" : `<span class="pill ${i.ats_pct >= 60 ? "ok" : i.ats_pct >= st.minAts ? "" : "bad"}" title="Keyword coverage of your base resume against this posting (deterministic)">${i.ats_pct}% keywords</span>`;
   const missing = (i) => { try { const m = JSON.parse(i.ats_missing || "[]"); return m.length ? `<span class="muted">missing: ${m.map(esc).join(", ")}</span>` : ""; } catch { return ""; } };
   return `${errBox()}
     <div class="card">
       <div class="toolbar" style="margin:0">
-        <div class="head-title"><h2>📡 Job feed</h2><div class="sub">${f.lastRefresh ? `Last refreshed ${fmtTime(f.lastRefresh)}` : "Never refreshed"}${st.autoHours ? ` · auto every ${st.autoHours}h` : ""} · ${st.keywords.length ? `keywords: ${esc(st.keywords.join(", "))}` : "<b>no keywords set</b>"}${c.screened_out ? ` · <span title="Unscored postings whose keyword coverage is below ${st.minAts}% — not sent to the model">${c.screened_out} screened out</span>` : ""}</div></div>
+        <div class="head-title"><h2>Job feed</h2><div class="sub"><span>${f.lastRefresh ? `Last refreshed ${fmtTime(f.lastRefresh)}` : "Never refreshed"}</span>${st.autoHours ? `<span>auto every ${st.autoHours}h</span>` : ""}<span>${st.keywords.length ? `keywords: ${esc(st.keywords.join(", "))}` : "<b>no keywords set</b>"}</span>${c.screened_out ? `<span title="Unscored postings whose keyword coverage is below ${st.minAts}% — not sent to the model">${c.screened_out} screened out</span>` : ""}</div></div>
         <div class="sp"></div>
         ${c.unscored - c.screened_out > 0 ? `<button id="feedScore" title="Triage the unscored postings with the feed model">★ Score ${Math.min(c.unscored - c.screened_out, st.scorePerRefresh)} unscored</button>` : ""}
-        <button class="primary" id="feedRefresh" ${configured ? "" : "disabled"}>↻ Refresh feed</button>
+        <button class="primary" id="feedRefresh" ${configured ? "" : "disabled"}>${icon("refresh")} Refresh feed</button>
       </div>
     </div>
     ${configured ? "" : `<div class="banner">Nothing configured yet — add a few keywords and either company boards or an aggregator below, then Refresh.</div>`}
     ${state.feedFilter === "hidden" ? `<div class="banner">These no longer pass your filters (locations, exclusions, career levels or keywords). They come back on their own when the filters change; scores are kept. To keep one anyway, track it.</div>` : ""}
     <div class="toolbar" style="margin-bottom:12px"><div class="filters" style="border:0;padding:0">${chips.map(([k, n]) => `<button data-feed-filter="${k}" class="${state.feedFilter === k ? "on" : ""}">${n}</button>`).join("")}</div><div class="sp"></div>
-      ${state.feedFilter === "hot" && items.length ? `<button class="ghost" data-bulk="track_hot" title="Create applications for every hot posting (up to 20)">＋ Track all hot</button>` : ""}
+      ${state.feedFilter === "hot" && items.length ? `<button class="ghost" data-bulk="track_hot" title="Create applications for every hot posting (up to 20)">${icon("plus")} Track all hot</button>` : ""}
       ${state.feedFilter === "open" || state.feedFilter === "unscored" ? `<button class="ghost" data-bulk="dismiss_low" title="Dismiss everything scored below the hot threshold">× Dismiss below ${st.minScore}</button>${c.screened_out ? `<button class="ghost" data-bulk="dismiss_screened" title="Dismiss unscored postings with keyword coverage below ${st.minAts}%">× Dismiss screened-out (${c.screened_out})</button>` : ""}` : ""}
     </div>
     ${items.length ? items.map((i, idx) => `<div class="feed-item ${i.fit_score >= st.minScore ? "hot" : ""} ${!i.seen && i.status === "new" ? "unseen" : ""} ${idx === state.feedCursor ? "cur" : ""}" data-feed-idx="${idx}" data-feed-id="${i.id}">
       <div class="feed-score">${dots(i.fit_score)}${i.fit_score != null ? `<b>${i.fit_score}</b>` : ""}</div>
       <div class="feed-main">
         <div class="feed-title">${!i.seen && i.status === "new" ? '<span class="newdot" title="New since you last looked"></span>' : ""}<b title="${i.title_en ? `Original: ${esc(i.title)}` : ""}">${esc(i.title_en || i.title)}</b>${i.title_en ? ` <span class="pill" title="Translated from ${esc((i.lang || "").toUpperCase())} — original: ${esc(i.title)}">${esc((i.lang || "").toUpperCase())} → EN</span>` : i.lang && i.lang !== "en" ? ` <span class="pill warn" title="Not translated">${esc(i.lang.toUpperCase())}</span>` : ""} <span class="muted">at</span> ${esc(i.company)}</div>
-        <div class="muted feed-meta">${i.level ? `<span class="pill">${esc(i.level)}</span> · ` : ""}${esc(i.location || "")}${i.remote ? " · remote" : ""}${i.salary ? ` · ${esc(i.salary)}` : ""}${i.posted_at ? ` · ${i.posted_at}` : ""} · <span class="pill">${esc(i.source)}</span> ${atsChip(i)}${i.desc_len ? "" : ' · <span title="The API gave no description; tracking will fetch the page">no text</span>'}</div>
+        <div class="muted feed-meta">${[i.level ? `<span class="pill">${esc(i.level)}</span>` : "", i.location ? `<span title="${esc(i.location)}">${esc(i.location.length > 60 ? i.location.slice(0, 57) + "…" : i.location)}</span>` : "", i.remote ? "remote" : "", i.salary ? esc(i.salary) : "", i.posted_at || "", `<span class="pill">${esc(i.source)}</span>`, atsChip(i), i.desc_len ? "" : '<span title="The API gave no description; tracking will fetch the page">no text</span>'].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div>
         ${i.fit_reason ? `<div class="feed-reason">${esc(i.fit_reason)}</div>` : ""}
         ${i.ats_missing && i.fit_score == null ? `<div class="feed-reason">${missing(i)}</div>` : ""}
         ${i.excerpt ? `<details class="feed-more"><summary>Preview</summary><div class="muted" style="white-space:pre-wrap;margin-top:6px">${esc(i.excerpt)}${i.desc_len > 700 ? "…" : ""}</div>${i.ats_missing && i.fit_score != null ? `<div style="margin-top:6px">${missing(i)}</div>` : ""}</details>` : ""}
       </div>
       <div class="feed-actions">
         ${i.status === "tracked" && i.application_id ? `<button class="primary" data-open-app="${i.application_id}">Open application ↗</button>`
-          : `<button class="primary" data-feed-track="${i.id}" title="Create an application from this posting (full extraction + fit score)">＋ Track</button>`}
+          : `<button class="primary" data-feed-track="${i.id}" title="Create an application from this posting (full extraction + fit score)">${icon("plus")} Track</button>`}
         <a href="${esc(i.url)}" target="_blank" rel="noopener"><button class="ghost">Posting ↗</button></a>
         ${i.fit_score == null && i.status === "new" ? `<button class="ghost" data-feed-score1="${i.id}" title="Score this one with the model">★</button>` : ""}
         ${i.status === "dismissed" ? `<button class="ghost" data-feed-restore="${i.id}">Restore</button><button class="ghost" data-feed-delete="${i.id}" title="Delete permanently">Delete</button>` : i.status === "hidden" ? `<button class="ghost" data-feed-delete="${i.id}" title="Delete permanently">Delete</button>` : `<button class="ghost" data-feed-dismiss="${i.id}" title="Remove from the feed (find it again under Dismissed)">× Remove</button>`}
@@ -379,9 +424,9 @@ function renderGoals() {
     <div class="card level">
       <div class="toolbar" style="margin:0">
         <div class="lvl-badge">${g.level.n}</div>
-        <div class="head-title"><h2>Level ${g.level.n} · ${esc(g.level.name)}</h2><div class="sub">${g.xp} XP · ${g.level.next - g.xp} to level ${g.level.n + 1} · ${g.total} application${g.total === 1 ? "" : "s"} sent</div></div>
+        <div class="head-title"><h2>Level ${g.level.n} — ${esc(g.level.name)}</h2><div class="sub"><span>${g.xp} XP</span><span>${g.level.next - g.xp} to level ${g.level.n + 1}</span><span>${g.total} application${g.total === 1 ? "" : "s"} sent</span></div></div>
         <div class="sp"></div>
-        <div class="streak ${g.streak ? "hot" : ""}" title="Consecutive days hitting your daily goal${g.goals.weekends ? "" : " (weekends are rest days)"}"><span>🔥</span><b>${g.streak}</b><small>day streak<br>best ${g.best}</small></div>
+        <div class="streak ${g.streak ? "hot" : ""}" title="Consecutive days hitting your daily goal${g.goals.weekends ? "" : " (weekends are rest days)"}"><span>${icon("flame")}</span><b>${g.streak}</b><small>day streak<br>best ${g.best}</small></div>
       </div>
       <div class="xp"><div style="width:${g.level.pct}%"></div></div>
     </div>
@@ -412,7 +457,7 @@ function renderGoals() {
         <div class="field"><label>Per week</label><input id="gWeekly" type="number" min="0" max="300" value="${g.goals.weekly}"></div>
         <div class="field"><label>Per month</label><input id="gMonthly" type="number" min="0" max="1000" value="${g.goals.monthly}"></div>
       </div>
-      <div class="field"><label>Nudge me to follow up after</label><div class="toolbar" style="margin:0"><input id="gFollow" type="number" min="0" max="90" value="${g.goals.followupDays}" style="width:90px"><span class="muted">days in <i>applied</i> / <i>screening</i> with no reply (0 = off). Shows as ⏰ in the list.</span></div></div>
+      <div class="field"><label>Nudge me to follow up after</label><div class="toolbar" style="margin:0"><input id="gFollow" type="number" min="0" max="90" value="${g.goals.followupDays}" style="width:90px"><span class="muted">days in <i>applied</i> / <i>screening</i> with no reply (0 = off). Shows as due in the list.</span></div></div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)"><input type="checkbox" id="gWeekends" ${g.goals.weekends ? "checked" : ""} style="width:auto"> Count weekends (untick to make Sat/Sun rest days that don't break a streak)</label>
       <div class="toolbar" style="margin:12px 0 0"><button class="primary" id="gSave">Save targets</button><span class="muted">Set a target to 0 to ignore it.</span></div>
     </div>`;
@@ -424,15 +469,15 @@ function goalWidget() {
   const d = g.periods.day;
   const pct = d.goal ? Math.min(100, Math.round((d.count / d.goal) * 100)) : 0;
   return `<div class="goal-mini ${d.met ? "met" : ""}" id="goalMini" title="Open goals">
-    <span>🎯</span><div class="goal-bar"><div style="width:${pct}%"></div></div><b>${d.count}/${d.goal || "–"}</b><span class="muted">today</span>
-    <span class="streak-mini ${g.streak ? "hot" : ""}">🔥 ${g.streak}</span></div>`;
+    <span class="muted">${icon("goals")}</span><div class="goal-bar"><div style="width:${pct}%"></div></div><b>${d.count}/${d.goal || "–"}</b><span class="muted">today</span>
+    <span class="streak-mini ${g.streak ? "hot" : ""}">${icon("flame")}${g.streak}</span></div>`;
 }
 
 // Toasts for what a status change just achieved.
 function celebrate(c) {
   if (!c) return;
   const msgs = [];
-  for (const h of c.hits) msgs.push(`🎯 ${h === "Today" ? "Daily" : h === "This week" ? "Weekly" : "Monthly"} goal hit!`);
+  for (const h of c.hits) msgs.push(`${h === "Today" ? "Daily" : h === "This week" ? "Weekly" : "Monthly"} goal hit!`);
   for (const a of c.unlocked) msgs.push(`${a.icon} Achievement unlocked: ${a.name}`);
   if (!msgs.length) return;
   state.notice = msgs.join("  ·  "); state.celebrate = true; render(true);
@@ -478,7 +523,7 @@ function render(force = false) {
   const scrollTop = main.scrollTop;
   renderSidebar(); bindSidebar();
   document.body.classList.toggle("detail", state.sel !== null);
-  const back = `<button class="back" id="backBtn">← Applications</button>`;
+  const back = `<button class="back ghost" id="backBtn">${icon("back")} Applications</button>`;
   const notice = (state.notice ? `<div class="notice ${state.celebrate ? "celebrate" : ""}"><span>${esc(state.notice)}</span>${state.noticeAction ? `<button id="noticeAct">${esc(state.noticeAction.label)}</button>` : ""}</div>` : "") + renderNeedsYou();
   let html;
   if (state.sel === "tasks") html = back + notice + renderTasks();
@@ -509,7 +554,7 @@ function render(force = false) {
   if (window.innerWidth <= 768 && state.sel !== null) window.scrollTo(0, 0);
 }
 
-const NAV = [["home", "🏠", "Home"], ["feed", "📡", "Feed"], ["goals", "🎯", "Goals"], ["tasks", "⏱", "Tasks"], ["settings", "⚙", "Settings"]];
+const NAV = [["home", "home", "Home"], ["feed", "feed", "Feed"], ["goals", "goals", "Goals"], ["tasks", "tasks", "Tasks"], ["settings", "settings", "Settings"]];
 const isPhone = () => window.innerWidth <= 768;
 function navHtml(mobile = false) {
   const hot = state.feedHot ?? 0, n = activeJobs().length, waiting = waitingJobs().length;
@@ -517,10 +562,10 @@ function navHtml(mobile = false) {
   const cur = mobile
     ? (state.sel === null || typeof state.sel === "number" || state.sel === "new" ? "apps" : state.sel)
     : (state.sel === null || state.sel === "home" || typeof state.sel === "number" || state.sel === "new" ? "home" : state.sel);
-  const items = mobile ? [["apps", "📋", "Apps"], ...NAV] : NAV;
-  return items.map(([k, ic, name]) => {
+  const items = mobile ? [["apps", "apps", "Apps"], ...NAV] : NAV;
+  return items.map(([k, icn, name]) => {
     const badge = k === "feed" && hot ? `<span class="badge ok">${hot}</span>` : k === "tasks" && (n || waiting) ? `<span class="badge ${waiting ? "warn" : ""}">${n}</span>` : "";
-    return `<button data-nav="${k}" class="${cur === k ? "on" : ""}"><span>${ic}</span><span>${name}</span>${badge}</button>`;
+    return `<button data-nav="${k}" class="${cur === k ? "on" : ""}">${icon(icn)}<span>${name}</span>${badge}</button>`;
   }).join("");
 }
 
@@ -530,8 +575,8 @@ function renderSidebar() {
   for (const a of state.apps) counts[a.status] = (counts[a.status] || 0) + 1;
   const due = state.apps.filter((a) => a.due).length;
   $("#filters").innerHTML = ["all", ...STATUSES].filter((s) => s === "all" || counts[s])
-    .map((s) => `<button data-f="${s}" class="${state.filter === s ? "on" : ""}">${s} ${counts[s] || 0}</button>`).join("")
-    + (due ? `<button data-f="due" class="due ${state.filter === "due" ? "on" : ""}">⏰ follow up ${due}</button>` : "");
+    .map((s) => `<button data-f="${s}" class="${s} ${state.filter === s ? "on" : ""}">${s} ${counts[s] || 0}</button>`).join("")
+    + (due ? `<button data-f="due" class="due ${state.filter === "due" ? "on" : ""}">${icon("clock")} follow up ${due}</button>` : "");
   const q = state.search.trim().toLowerCase();
   let rows = state.apps.filter((a) => !state.pendingDeletes.has(a.id) && (state.filter === "all" || (state.filter === "due" ? a.due : a.status === state.filter)) && (!q || `${a.company} ${a.role} ${a.location || ""}`.toLowerCase().includes(q)));
   const by = { recent: (a, b) => b.updated_at.localeCompare(a.updated_at), fit: (a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0) || b.updated_at.localeCompare(a.updated_at), applied: (a, b) => (b.applied_at || "").localeCompare(a.applied_at || "") || b.updated_at.localeCompare(a.updated_at), company: (a, b) => a.company.localeCompare(b.company) };
@@ -542,7 +587,7 @@ function renderSidebar() {
     <div class="row ${a.status} ${a.id === state.sel ? "sel" : ""}" data-id="${a.id}">
       <b>${esc(a.company)}${a.fit_score ? `<span class="pill fit f${a.fit_score}" title="Fit score">★ ${a.fit_score}</span>` : a.fit_status === "pending" ? `<span class="pill" title="Scoring fit…">★ …</span>` : ""}</b>
       <span>${esc(a.role)}</span>
-      <div class="meta"><span class="pill ${a.status}">${a.status}</span><small>${esc(a.location || "")}${a.applied_at ? ` · ${a.applied_at}` : ""}</small>${a.due === "action" ? `<small class="due-txt">⏰ ${esc(a.next_action || "action due")}</small>` : a.due === "followup" ? `<small class="due-txt">⏰ ${a.days_since}d — follow up</small>` : ""}</div>
+      <div class="meta"><span class="pill ${a.status}">${a.status}</span>${a.location ? `<small>${esc(a.location)}</small>` : ""}${a.applied_at ? `<small>${a.applied_at}</small>` : ""}${a.due === "action" ? `<small class="due-txt">${icon("clock")} ${esc(a.next_action || "action due")}</small>` : a.due === "followup" ? `<small class="due-txt">${icon("clock")} ${a.days_since}d — follow up</small>` : ""}</div>
     </div>`).join("") : `<div class="empty" style="padding:40px 16px">${state.apps.length ? "No matches" : "No applications yet.<br><small>Press <kbd>n</kbd> or use + New.</small>"}</div>`;
   const s = state.settings;
   $("#llmFootText").textContent = s ? `${s.provider} · ${s.model}` : "";
@@ -558,7 +603,7 @@ const PROVIDER_HELP = {
 
 function modelsFor(provider) { return state.modelCache[provider] || []; }
 
-const SETTINGS_SECTIONS = [["model", "🧠", "Model"], ["tasks", "🔀", "Per-task models"], ["guard", "🛡", "Quality guard"], ["resumes", "📄", "Base resumes"], ["documents", "📝", "Documents"], ["prompts", "💬", "Prompts"], ["security", "🔒", "Security"]];
+const SETTINGS_SECTIONS = [["model", "model", "Model"], ["tasks", "routes", "Per-task models"], ["guard", "guard", "Quality guard"], ["resumes", "resume", "Base resumes"], ["documents", "documents", "Documents"], ["prompts", "prompts", "Prompts"], ["security", "security", "Security"]];
 function renderSettings() {
   const s = state.settings;
   const models = modelsFor(s.provider);
@@ -581,7 +626,7 @@ function renderSettings() {
       <div class="field"><label>Ollama host</label>
         <div class="toolbar" style="margin:0"><input id="sHost" value="${esc(s.ollamaHost)}" placeholder="http://localhost:11434" style="flex:1"><button id="sHostSave">Save host</button></div></div>`
       : `
-      <div class="field"><label>API key ${keyMask ? `<span style="color:var(--ok)">● ${esc(keyMask)}</span> <span class="muted">(${keySrc === "app" ? "saved in app" : "from .env"})</span>` : `<span style="color:var(--bad)">● none</span>`}</label>
+      <div class="field"><label>API key ${keyMask ? `<span style="color:var(--ok)"><span class="dot-mark ok"></span> ${esc(keyMask)}</span> <span class="muted">(${keySrc === "app" ? "saved in app" : "from .env"})</span>` : `<span style="color:var(--bad)"><span class="dot-mark bad"></span> none</span>`}</label>
         <div class="toolbar" style="margin:0">
           <input id="sKey" type="password" autocomplete="off" placeholder="${keyMask ? "Paste a new key to replace" : s.provider === "anthropic" ? "sk-ant-…" : "sk-or-…"}" style="flex:1">
           <button id="sKeySave" class="primary">Save key</button>
@@ -593,7 +638,7 @@ function renderSettings() {
         ${comboHtml("sModel", s.provider, models)}
         <div class="toolbar" style="margin-top:6px">
           <button id="sSave">Use typed model id</button>
-          <button class="ghost" id="sLoad">${models.length ? `↻ Reload list (${models.length})` : "Load available models"}</button>
+          <button class="ghost" id="sLoad">${models.length ? `${icon("refresh")} Reload list (${models.length})` : "Load available models"}</button>
         </div></div>
     </div>`,
     security: () => `<div class="card"><h2>Security</h2>
@@ -629,7 +674,7 @@ function renderSettings() {
       </details>`).join("") : '<p class="muted">Loading…</p>'}
     </div>` : ""}
     <div class="card"><h2>Learned formatting preferences</h2>
-      <p class="muted">Rules the app has learned from your manual edits (🎓 on a resume / cover letter tab). Injected into every future generation as formatting guidance only — they never add or change facts. Edit freely; one rule per line.</p>
+      <p class="muted">Rules the app has learned from your manual edits (“Learn my format” on a resume or cover letter tab). Injected into every future generation as formatting guidance only — they never add or change facts. Edit freely; one rule per line.</p>
       ${state.style ? ["resume", "cover_letter"].map((k) => `<details class="prompt" data-style="${k}" ${state.style[k] ? "open" : ""}>
         <summary>${k === "resume" ? "Resume" : "Cover letter"} ${state.style[k] ? `<span class="pill accent">${state.style[k].split("\n").filter(Boolean).length} rules</span>` : '<span class="muted">none yet</span>'}</summary>
         <textarea class="styleText" style="min-height:120px;margin-top:6px" placeholder="- Keep every bullet to one line and start it with a verb\n- Put Education last\n- Dates as 'Mon YYYY – Mon YYYY'">${esc(state.style[k])}</textarea>
@@ -652,7 +697,7 @@ function renderSettings() {
       <div class="field"><label>Fallback model ${state.guard.settings.provider && state.guard.settings.model ? "" : `<span class="muted">— auto: ${state.guard.auto ? `<code>${esc(state.guard.auto.provider)} · ${esc(state.guard.auto.model)}</code>` : "<b>none available</b> (add an Anthropic key or route a task to a strong model)"}</span>`}</label>
         <div class="toolbar" style="margin:0"><div class="seg">${["auto", ...s.providers].map((p) => `<button data-guard-provider="${p}" class="${(state.guard.settings.provider || "auto") === p ? "on" : ""}">${p}</button>`).join("")}</div>
         ${state.guard.settings.provider ? comboHtml("guardModel", state.guard.settings.provider, modelsFor(state.guard.settings.provider), state.guard.settings.model || "") : ""}</div></div>
-      ${state.guard.unreliable.length ? `<div class="banner">⚠ Unreliable routing: ${state.guard.unreliable.map((u) => `<b>${esc(u.task)}</b> → ${esc(u.provider)} · ${esc(u.model)}`).join(", ")} — these models have returned junk in ≥30% of calls. Route them to something stronger below.</div>` : ""}
+      ${state.guard.unreliable.length ? `<div class="banner">${icon("warn")} Unreliable routing: ${state.guard.unreliable.map((u) => `<b>${esc(u.task)}</b> → ${esc(u.provider)} · ${esc(u.model)}`).join(", ")} — these models have returned junk in ≥30% of calls. Route them to something stronger below.</div>` : ""}
       ${state.guard.stats.length ? `<table class="stats"><tr><th>Model</th><th>OK</th><th>Junk</th><th>Rate</th><th>Last problem</th></tr>${state.guard.stats.map((m) => `<tr class="${m.junkRate >= 30 && m.total >= 3 ? "bad" : ""}"><td>${esc(m.id)}</td><td>${m.ok}</td><td>${m.junk}</td><td>${m.junkRate}%</td><td class="muted">${esc(m.lastProblem || "")}</td></tr>`).join("")}</table>
       <div class="toolbar" style="margin:8px 0 0"><button class="ghost" id="guardClear">Clear statistics</button></div>` : '<p class="muted">No calls recorded yet.</p>'}` : '<p class="muted">Loading…</p>'}
     </div>`,
@@ -663,7 +708,7 @@ function renderSettings() {
         const prov = r?.provider ?? null;
         const bad = state.guard?.unreliable.some((u) => u.task === (r ? t : "default"));
         return `<div class="task-row" data-task="${t}">
-          <div class="task-name">${esc(name)}${bad ? ' <span class="pill bad" title="This model has returned junk in ≥30% of calls">⚠ unreliable</span>' : ""}${r ? `<div class="muted"><code>${esc(r.provider)} · ${esc(r.model)}</code></div>` : `<div class="muted">default (${esc(s.provider)} · ${esc(s.model)})</div>`}</div>
+          <div class="task-name">${esc(name)}${bad ? ' <span class="pill bad" title="This model has returned junk in ≥30% of calls">unreliable</span>' : ""}${r ? `<div class="muted"><code>${esc(r.provider)} · ${esc(r.model)}</code></div>` : `<div class="muted">default (${esc(s.provider)} · ${esc(s.model)})</div>`}</div>
           <div class="seg">${["default", ...s.providers].map((p) => `<button data-task-provider="${p}" class="${(p === "default" ? !r : prov === p) ? "on" : ""}">${p}</button>`).join("")}</div>
           ${r ? comboHtml(`task_${t}`, r.provider, modelsFor(r.provider), r.model) : ""}
         </div>`;
@@ -672,7 +717,7 @@ function renderSettings() {
   };
   return `${busy()}${errBox()}
     <div class="settings">
-      <nav class="settings-nav">${SETTINGS_SECTIONS.map(([k, ic, n]) => `<button data-settings-section="${k}" class="${k === sec ? "on" : ""}"><span>${ic}</span>${n}${marks[k] || ""}</button>`).join("")}</nav>
+      <nav class="settings-nav">${SETTINGS_SECTIONS.map(([k, icn, n]) => `<button data-settings-section="${k}" class="${k === sec ? "on" : ""}">${icon(icn)}${n}${marks[k] || ""}</button>`).join("")}</nav>
       <div class="settings-body fade">${cards[sec]()}</div>
     </div>`;
 }
@@ -724,30 +769,30 @@ function renderHome() {
       <div class="checklist">${steps.map((x) => `<div class="check ${x.done ? "done" : ""}"><span class="ic">${x.done ? "✓" : ""}</span><div class="sp"><b>${x.name}</b><small>${esc(x.hint)}</small></div>${x.done ? "" : x.action}</div>`).join("")}</div></div>` : ""}
 
     <div class="card">
-      <div class="toolbar" style="margin-bottom:12px"><h2 style="margin:0">Today</h2><div class="sp"></div><button class="primary" id="dashNew">+ New application</button><button id="dashRefresh" ${f?.settings?.keywords?.length || state.feedKeywords ? "" : "disabled"} title="Refresh the job feed">↻ Feed</button></div>
+      <div class="toolbar" style="margin-bottom:12px"><h2 style="margin:0">Today</h2><div class="sp"></div><button class="primary" id="dashNew">${icon("plus")} New application</button><button id="dashRefresh" ${f?.settings?.keywords?.length || state.feedKeywords ? "" : "disabled"} title="Refresh the job feed">${icon("refresh")} Feed</button></div>
       <div class="tiles">
-        <div class="tile ${g?.periods.day.met ? "ok" : ""}" data-nav="goals"><b>${g ? `${g.periods.day.count}<span class="muted" style="font-size:14px">/${g.periods.day.goal || "–"}</span>` : "–"}</b><small>applied today${g?.streak ? ` · 🔥 ${g.streak}-day streak` : ""}</small></div>
+        <div class="tile ${g?.periods.day.met ? "ok" : ""}" data-nav="goals"><b>${g ? `${g.periods.day.count}<span class="muted" style="font-size:14px">/${g.periods.day.goal || "–"}</span>` : "–"}</b><small>applied today${g?.streak ? ` — ${g.streak}-day streak` : ""}</small></div>
         <div class="tile ${due.length ? "warn" : ""}" data-filter="due"><b>${due.length}</b><small>follow-up${due.length === 1 ? "" : "s"} due</small></div>
         <div class="tile ${hot ? "ok" : ""}" data-nav="feed"><b>${hot}</b><small>hot in the feed</small></div>
         <div class="tile" data-nav="tasks"><b>${activeJobs().length}</b><small>task${activeJobs().length === 1 ? "" : "s"} running</small></div>
       </div>
     </div>
 
-    ${due.length ? `<div class="card"><h3>Needs attention</h3>${due.slice(0, 6).map((a) => `<div class="act"><small>${a.due === "action" ? "⏰ " + esc(a.next_action || "action due") : `⏰ ${a.days_since}d quiet`}</small><a data-open-app="${a.id}"><b>${esc(a.company)}</b> · ${esc(a.role)}</a></div>`).join("")}</div>` : ""}
+    ${due.length ? `<div class="card"><h3>Needs attention</h3>${due.slice(0, 6).map((a) => `<div class="act"><small>${a.due === "action" ? esc(a.next_action || "action due") : `${a.days_since}d quiet`}</small><a data-open-app="${a.id}"><b>${esc(a.company)}</b> — ${esc(a.role)}</a></div>`).join("")}</div>` : ""}
 
     <div class="card"><div class="toolbar"><h3 style="margin:0">Recent activity</h3></div>
-      ${state.activity === null ? '<p class="muted"><span class="spinner"></span>Loading…</p>' : state.activity.length ? state.activity.map((e) => `<div class="act"><small>${fmtTime(e.created_at)}</small><span>${EV_ICON[e.kind] || "•"} <a data-open-app="${e.application_id}"><b>${esc(e.company)}</b></a> — ${esc(e.kind.replace("_", " "))}${e.detail ? `: <span class="muted">${esc(e.detail.slice(0, 90))}</span>` : ""}</span></div>`).join("") : '<p class="muted">Nothing yet — capture a posting to get going.</p>'}
+      ${state.activity === null ? '<p class="muted"><span class="spinner"></span>Loading…</p>' : state.activity.length ? state.activity.map((e) => `<div class="act"><small>${fmtTime(e.created_at)}</small><span>${EV_ICON[e.kind] || ""}<a data-open-app="${e.application_id}"><b>${esc(e.company)}</b></a> — ${esc(e.kind.replace("_", " "))}${e.detail ? `: <span class="muted">${esc(e.detail.slice(0, 90))}</span>` : ""}</span></div>`).join("") : '<p class="muted">Nothing yet — capture a posting to get going.</p>'}
     </div>
 
     <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">Capture from your browser — the bookmarklet</summary>
       <p style="margin-top:10px">Drag this to your bookmarks bar, then click it while viewing a job posting. It sends the page as <i>you</i> see it — logged in, fully rendered — so nothing gets blocked, and it clears human-verification hand-offs too.</p>
-      <p><a id="bookmarklet" class="bm" href="#" draggable="true">📌 Save to Job Tracker</a> <button id="bmCopy" style="margin-left:8px">Copy code</button> <span class="muted">(can't drag? copy, create a bookmark, paste as its URL)</span></p>
+      <p><a id="bookmarklet" class="bm" href="#" draggable="true">${icon("pin")}Save to Job Tracker</a> <button id="bmCopy" style="margin-left:8px">Copy code</button> <span class="muted">(can't drag? copy, create a bookmark, paste as its URL)</span></p>
     </details>
     <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">Answer bank — search everything you've answered before</summary>
       <input id="bankQ" placeholder="Search previous answers…" style="margin-top:10px"><div id="bank"></div>
     </details>
     <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">Backup & export</summary>
-      <div class="toolbar" style="margin:10px 0 0"><a href="/api/export/backup"><button class="primary">⬇ Full backup (.tar.gz)</button></a><a href="/api/export/applications.csv"><button>⬇ Applications (.csv)</button></a><span class="muted">Database, application folders, base resume, templates, secret key.</span></div>
+      <div class="toolbar" style="margin:10px 0 0"><a href="/api/export/backup"><button class="primary">${icon("download")} Full backup (.tar.gz)</button></a><a href="/api/export/applications.csv"><button>${icon("download")} Applications (.csv)</button></a><span class="muted">Database, application folders, base resume, templates, secret key.</span></div>
     </details>`;
 }
 
@@ -766,7 +811,7 @@ function renderNew() {
         <div class="field"><label>Location</label><input id="mLocation" data-draft="new:0:mlocation" placeholder="Singapore / Remote"></div>
         <div class="field"><label>Posting URL</label><input id="mUrl" data-draft="new:0:murl" placeholder="https://…"></div>
       </div>
-      <div class="field"><label>Status</label><div class="seg status-seg" style="margin:0" id="mStatus">${STATUSES.map((st) => `<button data-mstatus="${st}" class="${st === (state.newStatus || "applied") ? "on " + st : ""}">${st}</button>`).join("")}</div></div>
+      <div class="field"><label>Status</label><div class="seg status-seg" style="margin:0" id="mStatus">${STATUSES.map((st) => `<button data-mstatus="${st}" class="${st} ${st === (state.newStatus || "applied") ? "on" : ""}">${st}</button>`).join("")}</div></div>
       <div class="grid2">
         <div class="field"><label>Applied on</label><input type="date" id="mApplied" value="${localDate()}"></div>
         <div class="field"><label>Notes</label><input id="mNotes" data-draft="new:0:mnotes" placeholder="referral from …, recruiter name"></div>
@@ -801,28 +846,28 @@ function renderDetail(a) {
   return `${errBox()}
     <div class="card fade">
       <div class="toolbar head-row" style="margin:0">
-        <div class="head-title"><h2>${esc(a.role)}</h2><div class="sub">${esc(a.company)}${a.location ? ` · ${esc(a.location)}` : ""}${a.salary ? ` · ${esc(a.salary)}` : ""} ${a.url ? `· <a href="${esc(a.url)}" target="_blank" rel="noopener">posting ↗</a>` : ""}</div></div>
+        <div class="head-title"><h2>${esc(a.role)}</h2><div class="sub"><span>${esc(a.company)}</span>${a.location ? `<span>${esc(a.location)}</span>` : ""}${a.salary ? `<span>${esc(a.salary)}</span>` : ""}${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">posting ↗</a>` : ""}</div></div>
         <div class="sp"></div>
-        <button id="delBtn" class="ghost icon" title="Delete application">🗑</button>
+        <button id="delBtn" class="ghost icon" title="Delete application">${icon("trash")}</button>
       </div>
       ${(() => {
         const phone = isPhone(), due = !!a.next_action_at && a.next_action_at <= localDate();
         // On a phone the seven status pills and the date controls are folded behind one line each.
         const statusRow = phone && !state.statusOpen
           ? `<button class="status-cur ${a.status}" id="statusOpen" title="Change status">${a.status} ▾</button>`
-          : `<div class="seg status-seg" style="margin:0">${STATUSES.map((s) => `<button data-status="${s}" class="${s === a.status ? "on " + s : ""}">${s}</button>`).join("")}</div>`;
-        const summary = [a.applied_at ? `Applied ${a.applied_at}` : "Not applied yet", a.next_action_at ? `<span class="${due ? "due-txt" : ""}">⏰ ${esc(a.next_action || "next action")} · ${a.next_action_at}${due ? " · due" : ""}</span>` : "", a.notes ? `📝 ${esc(a.notes.slice(0, 60))}${a.notes.length > 60 ? "…" : ""}` : ""].filter(Boolean).join(" · ");
+          : `<div class="seg status-seg" style="margin:0">${STATUSES.map((s, i) => `<button data-status="${s}" class="${s} ${s === a.status ? "on" : i < STATUSES.indexOf(a.status) && STATUSES.indexOf(a.status) < 5 ? "past" : ""}">${s}</button>`).join("")}</div>`;
+        const summary = [a.applied_at ? `Applied ${a.applied_at}` : "Not applied yet", a.next_action_at ? `<span class="${due ? "due-txt" : ""}">${icon("clock")} ${esc(a.next_action || "next action")} ${a.next_action_at}${due ? " — due" : ""}</span>` : "", a.notes ? `${icon("note")} ${esc(a.notes.slice(0, 60))}${a.notes.length > 60 ? "…" : ""}` : ""].filter(Boolean).join(" · ");
         const meta = `<div class="head-meta">
           <label>Applied <input type="date" id="applied" value="${a.applied_at || ""}"></label>
-          <label class="${due ? "due" : ""}">${due ? "⏰ Due" : "Next action"} <input type="date" id="nextAt" value="${a.next_action_at || ""}"><input id="nextTxt" placeholder="what, e.g. chase recruiter" value="${esc(a.next_action || "")}"></label>
-          <span><button data-log="followup" title="Logs a follow-up today and clears the next action">✓ Followed up</button> <button data-log="call" class="ghost">☎ Call</button> <button data-log="interview" class="ghost">🤝 Interview</button></span>
+          <label class="${due ? "due" : ""}">${due ? `${icon("clock")} Due` : "Next action"} <input type="date" id="nextAt" value="${a.next_action_at || ""}"><input id="nextTxt" placeholder="what, e.g. chase recruiter" value="${esc(a.next_action || "")}"></label>
+          <span><button data-log="followup" title="Logs a follow-up today and clears the next action">✓ Followed up</button> <button data-log="call" class="ghost">${icon("phone")} Call</button> <button data-log="interview" class="ghost">${icon("users")} Interview</button></span>
           ${a.followed_up_at ? `<span class="muted">last follow-up ${a.followed_up_at}</span>` : ""}
         </div>
         <textarea id="notes" class="notes-line" placeholder="Notes…" rows="1" data-draft="notes:${a.id}:x">${esc(a.notes)}</textarea>`;
         return `<div class="toolbar" style="margin:8px 0 12px;gap:6px 12px">
         ${statusRow}
         <div class="sp"></div>
-        <button id="applyBtn" class="${state.applyOpen ? "on" : a.status === "saved" ? "primary" : "ghost"}" title="Everything you need to submit this application in one place: PDFs, answers, the files folder, and marking it applied">${a.status === "saved" ? "🚀 Apply" : "📦 Apply pack"}</button>
+        <button id="applyBtn" class="${state.applyOpen ? "on" : a.status === "saved" ? "primary" : "ghost"}" title="Everything you need to submit this application in one place: PDFs, answers, the files folder, and marking it applied">${a.status === "saved" ? `${icon("send")} Apply` : `${icon("package")} Apply pack`}</button>
       </div>
       ${state.applyOpen ? renderApply(a) : ""}
       ${phone && !state.headOpen ? `<button class="head-summary" id="headOpen" title="Dates, follow-ups and notes">${summary} <span class="muted">· edit ▾</span></button>` : meta}`;
@@ -840,19 +885,20 @@ function renderApply(a) {
   const days = state.goals?.goals?.followupDays ?? 7; // 0 = nudges off → no follow-up prefilled
   const docRow = (kind, label) => {
     const doc = latest(kind);
-    if (!doc) return `<div class="apply-row"><span class="ic bad">✗</span><div class="sp"><b>${label}</b> <span class="muted">not generated yet</span></div><button data-gen="${kind}">✨ Generate</button></div>`;
+    if (!doc) return `<div class="apply-row"><span class="ic bad">✗</span><div class="sp"><b>${label}</b> <span class="muted">not generated yet</span></div><button data-gen="${kind}">${icon("sparkle")} Generate</button></div>`;
     const pages = doc.pages && doc.pdf_current ? `${doc.pages} page${doc.pages > 1 ? "s" : ""}` : "";
     const warn = kind === "resume" && doc.pages > 1 && doc.pdf_current;
     return `<div class="apply-row"><span class="ic ${warn ? "warn" : "ok"}">${warn ? "!" : "✓"}</span><div class="sp"><b>${label}</b> <span class="muted">v${count(kind)}${pages ? ` · ${warn ? `<span style="color:var(--warn)">${pages}</span>` : pages}` : ""}${doc.edited ? " · edited by you" : ""}${doc.instructions ? ` · “${esc(doc.instructions.slice(0, 40))}${doc.instructions.length > 40 ? "…" : ""}”` : ""}${doc.file_name ? ` · <code title="File name the recruiter sees — change the pattern in Settings → Documents">${esc(doc.file_name)}</code>` : ""}</span></div>
-      ${a.latex ? `<a href="/doc/${doc.id}.pdf" target="_blank"><button>⬇ PDF</button></a>` : `<a href="/doc/${doc.id}" target="_blank"><button>Print / Save as PDF</button></a>`}</div>`;
+      ${a.latex ? `<a href="/doc/${doc.id}.pdf" target="_blank"><button>${icon("download")} PDF</button></a>` : `<a href="/doc/${doc.id}" target="_blank"><button>Print / Save as PDF</button></a>`}</div>`;
   };
   const n = a.questions.length;
   return `<div class="apply fade" id="applyPanel">
     <div class="toolbar" style="margin:0 0 4px"><h3 style="margin:0">Apply to ${esc(a.company)}</h3><span class="muted">${a.status === "saved" ? "Get the pieces, submit on their site, then mark it applied." : `Marked applied${a.applied_at ? ` on ${a.applied_at}` : ""}.`}</span><div class="sp"></div><button class="ghost icon" id="applyClose" title="Close">×</button></div>
     ${docRow("resume", "Resume")}
     ${docRow("cover_letter", "Cover letter")}
-    <div class="apply-row"><span class="ic ${n ? "ok" : ""}">${n ? "✓" : "–"}</span><div class="sp"><b>Answers</b> <span class="muted">${n ? `${n} ready to paste into the form` : "none drafted yet"}</span></div>${n ? `<button id="applyCopyAns" title="Copies every question and answer as plain text">⎘ Copy all answers</button>` : `<button class="ghost" data-tab="questions">Questions tab</button>`}</div>
-    <div class="apply-row"><span class="ic">📂</span><div class="sp"><b>Files</b> <span class="muted">applications/${esc(a.folder)}/ — drag the PDFs from Finder into the upload fields</span></div><button id="applyReveal" title="Rebuilds the PDFs if needed and opens the folder in Finder">Show in Finder</button></div>
+    <div class="apply-row"><span class="ic ${n ? "ok" : ""}">${n ? "✓" : "–"}</span><div class="sp"><b>Answers</b> <span class="muted">${n ? `${n} ready to paste into the form` : "none drafted yet"}</span></div>${n ? `<button id="applyCopyAns" title="Copies every question and answer as plain text">${icon("copy")} Copy all answers</button>` : `<button class="ghost" data-tab="questions">Questions tab</button>`}</div>
+    <div class="apply-row"><span class="ic">${icon("pin")}</span><div class="sp"><b>Autofill</b> <span class="muted">drag to your bookmarks bar, then click it on the application form to fill your details and any matching answers</span></div><a id="applyAutofill" class="bm" href="#" draggable="true">${icon("pin")}Fill this application</a></div>
+    <div class="apply-row"><span class="ic">${icon("folder")}</span><div class="sp"><b>Files</b> <span class="muted">applications/${esc(a.folder)}/ — drag the PDFs from Finder into the upload fields</span></div><button id="applyReveal" title="Rebuilds the PDFs if needed and opens the folder in Finder">Show in Finder</button></div>
     ${a.status === "saved" ? `<div class="apply-done">
       <label>Applied on <input type="date" id="applyDate" value="${localDate()}"></label>
       <label>Follow up on <input type="date" id="applyNextAt" value="${days ? localDate(days) : ""}"><input id="applyNextTxt" value="${days ? "Follow up if no reply" : ""}" placeholder="next action"></label>
@@ -871,7 +917,7 @@ function renderFit(a) {
   const bases = a.resumes || [];
   const baseRow = bases.length > 1 ? `<div class="toolbar" style="margin:0 0 8px;gap:6px"><span class="muted">Base resume:</span><div class="seg">${bases.map((b) => `<button data-base="${esc(b.key)}" class="${(a.resume_key || "default") === b.key ? "on" : ""}" title="${a.fit_all?.[b.key] ? `Fit ${a.fit_all[b.key].score}/5 with this base` : "Not scored with this base yet"}">${esc(b.label)}${a.fit_all?.[b.key] ? ` <span class="tb">★${a.fit_all[b.key].score}</span>` : ""}</button>`).join("")}</div>${a.resume_pinned ? '<span class="muted">pinned by you</span>' : '<span class="muted">best fit chosen automatically</span>'}</div>` : "";
   return `<div class="card fit">
-    <div class="toolbar" style="margin:0 0 6px"><div class="dots">${dots(f.score)}</div><b style="font-size:16px">${f.score}/5</b><span>${esc(f.verdict)}</span><div class="sp"></div><button data-fit title="Re-score against every base resume">↻ Re-score</button></div>
+    <div class="toolbar" style="margin:0 0 6px"><div class="dots">${dots(f.score)}</div><b style="font-size:16px">${f.score}/5</b><span>${esc(f.verdict)}</span><div class="sp"></div><button data-fit title="Re-score against every base resume">${icon("refresh")} Re-score</button></div>
     ${baseRow}
     <div class="fitgrid">
       <div><h4>Met</h4>${chips(f.met, "ok")}</div>
@@ -899,10 +945,10 @@ function renderJob(a) {
   </div>`;
   return `${renderFit(a)}${hasDraft(jk) ? `<div class="banner draft"><span>✎ You have unsaved edits to the job details.</span><button data-edit-job>Continue editing</button><button class="ghost" data-discard="${jk}">Discard</button></div>` : ""}<div class="card">
     <div class="toolbar"><h3 style="margin:0">Key requirements</h3><div class="sp"></div>
-      ${a.lang && a.lang !== "en" ? `<button data-translate class="primary" title="Translate the role, description and requirements to English (the original stays as source text)">🌐 Translate from ${esc(a.lang.toUpperCase())}</button>` : ""}
-      <button data-reextract="description" title="${a.has_source_text ? "Re-run extraction on the original captured page text with the current capture model" : "Re-run extraction on the saved description with the current capture model"}">↻ Re-extract</button>
-      ${a.url ? `<button data-reextract="url" title="Fetch the posting again and re-extract">↻ Fetch again</button>` : ""}
-      <button data-edit-job>✎ Edit</button></div>
+      ${a.lang && a.lang !== "en" ? `<button data-translate class="primary" title="Translate the role, description and requirements to English (the original stays as source text)">${icon("globe")} Translate from ${esc(a.lang.toUpperCase())}</button>` : ""}
+      <button data-reextract="description" title="${a.has_source_text ? "Re-run extraction on the original captured page text with the current capture model" : "Re-run extraction on the saved description with the current capture model"}">${icon("refresh")} Re-extract</button>
+      ${a.url ? `<button data-reextract="url" title="Fetch the posting again and re-extract">${icon("refresh")} Fetch again</button>` : ""}
+      <button data-edit-job>${icon("pen")} Edit</button></div>
     ${!a.requirements.length || !a.location ? `<div class="banner" style="margin:8px 0">Looks thin (${[!a.location && "no location", !a.salary && "no salary", !a.requirements.length && "no requirements"].filter(Boolean).join(", ")}). The page may have been a JavaScript shell — use the <b>Save to Job Tracker</b> bookmarklet from the home screen on the posting, or paste the description via ✎ Edit, then ↻ Re-extract.</div>` : ""}
     <div>${a.requirements.map((r) => `<span class="req">${esc(r)}</span>`).join("") || '<span class="muted">none extracted</span>'}</div>
     <h3 style="margin-top:16px">Description</h3><div class="preview desc">${mdToHtml(a.description || "")}</div>
@@ -964,19 +1010,19 @@ function renderDoc(a, kind) {
   return `<div class="card">
     <div class="doc-actions">
       <div class="doc-group gen"><span>Generate</span><div>
-        <button class="${doc ? "" : "primary"}" data-gen="${kind}">✨ ${doc ? "Regenerate" : "Generate"} ${label}</button>
+        <button class="${doc ? "" : "primary"}" data-gen="${kind}">${icon("sparkle")} ${doc ? "Regenerate" : "Generate"} ${label}</button>
         ${kind === "resume" ? `<button data-gen="both" title="Resume first, then a cover letter based on it">Resume + cover letter</button>` : ""}
       </div>
       <input id="genNote" class="gen-note" value="${esc(note)}" placeholder="Instructions for the next draft — e.g. shorter · lead with the Monta work · mention my visa status" title="Optional. Steers the next draft (and the cover letter when generating both); kept with the version it produces. Enter to generate."></div>
       ${doc && !old ? `<div class="doc-group"><span>Refine</span><div>
-        ${kind === "resume" ? `<button data-condense="${doc.id}" class="${overflow ? "primary" : ""}" title="Ask the model to cut this version down to one page (saves as a new version)">✂ Condense</button>` : ""}
-        <button data-learn="${doc.id}" ${doc.edited ? "" : "disabled"} title="${doc.edited ? "Compare your edits with the generated version and update the formatting rules for future " + label + "s (content is ignored)" : "Edit and save the Markdown first, then the app can learn your formatting preferences"}">🎓 Learn my format</button>
+        ${kind === "resume" ? `<button data-condense="${doc.id}" class="${overflow ? "primary" : ""}" title="Ask the model to cut this version down to one page (saves as a new version)">${icon("scissors")} Condense</button>` : ""}
+        <button data-learn="${doc.id}" ${doc.edited ? "" : "disabled"} title="${doc.edited ? "Compare your edits with the generated version and update the formatting rules for future " + label + "s (content is ignored)" : "Edit and save the Markdown first, then the app can learn your formatting preferences"}">${icon("cap")} Learn my format</button>
       </div></div>` : ""}
       ${doc ? `<div class="doc-right">
       <div class="doc-group"><span>View</span><div><div class="seg">${modes.map(([m, n]) => `<button data-docmode="${m}" class="${mode === m ? "on" : ""}">${n}</button>`).join("")}</div></div></div>
       <div class="doc-group"><span>Export</span><div>
-        ${a.latex ? `<a href="/doc/${doc.id}.pdf" target="_blank"><button class="primary">⬇ PDF</button></a><a href="/doc/${doc.id}" target="_blank"><button class="ghost" title="Browser print fallback">Print</button></a>` : `<a href="/doc/${doc.id}" target="_blank"><button class="primary">Print / Save as PDF</button></a>`}
-        <button data-copy-text="${doc.id}" title="Copy as plain text — for application forms that want the ${label} pasted in">⎘ Copy text</button>
+        ${a.latex ? `<a href="/doc/${doc.id}.pdf" target="_blank"><button class="primary">${icon("download")} PDF</button></a><a href="/doc/${doc.id}" target="_blank"><button class="ghost" title="Browser print fallback">Print</button></a>` : `<a href="/doc/${doc.id}" target="_blank"><button class="primary">Print / Save as PDF</button></a>`}
+        <button data-copy-text="${doc.id}" title="Copy as plain text — for application forms that want the ${label} pasted in">${icon("copy")} Copy text</button>
       </div></div>
       </div>` : ""}
     </div>
@@ -995,7 +1041,7 @@ function renderAts(a, doc) {
   const rep = stale ? null : r;
   const bar = (pct, cls) => `<div class="ats-bar"><div class="${cls}" style="width:${pct}%"></div></div>`;
   return `<details class="ats" ${state.atsOpen ? "open" : ""} id="atsBox">
-    <summary><span>🔍 ATS keyword check${rep ? ` — <b>${rep.requiredCoverage}%</b> of required terms, ${rep.coverage}% overall` : ""}</span><span class="muted">${rep ? `${rep.label} · ${rep.words} words` : "checking…"}</span></summary>
+    <summary><span>${icon("search")} ATS keyword check${rep ? ` — <b>${rep.requiredCoverage}%</b> of required terms, ${rep.coverage}% overall` : ""}</span><span class="muted">${rep ? `${rep.label} · ${rep.words} words` : "checking…"}</span></summary>
     ${rep ? `
       <div class="ats-grid">
         <div><div class="muted">Required terms <b>${rep.matched.filter((t) => t.required).length}/${rep.matched.filter((t) => t.required).length + rep.missing.filter((t) => t.required).length}</b></div>${bar(rep.requiredCoverage, rep.requiredCoverage >= 80 ? "ok" : rep.requiredCoverage >= 50 ? "warn" : "bad")}</div>
@@ -1041,7 +1087,7 @@ function renderQuestions(a) {
   return `<div class="card">
     <h3>Paste application questions (one per line)</h3>
     <textarea id="qIn" data-draft="qin:${a.id}:x" placeholder="Why do you want to work at ${esc(a.company)}?\nDescribe a project you're proud of.">${found && !a.questions.length ? esc(found.detail) : ""}</textarea>
-    <div class="toolbar" style="margin-top:8px"><button class="primary" id="answerBtn">Draft answers</button><span class="muted">Reuses your answers from other applications where they fit.</span><div class="sp"></div>${a.questions.length > 1 ? `<button id="copyAllAns" title="Every question and answer as plain text">⎘ Copy all answers</button>` : ""}</div>
+    <div class="toolbar" style="margin-top:8px"><button class="primary" id="answerBtn">Draft answers</button><span class="muted">Reuses your answers from other applications where they fit.</span><div class="sp"></div>${a.questions.length > 1 ? `<button id="copyAllAns" title="Every question and answer as plain text">${icon("copy")} Copy all answers</button>` : ""}</div>
   </div>
   ${a.questions.map((q) => `<div class="qa" data-q="${q.id}">
     <h4>${esc(q.question)}</h4>
@@ -1053,16 +1099,16 @@ function renderQuestions(a) {
 function renderPrep(a) {
   const doc = a.documents.find((d) => d.kind === "prep");
   return `<div class="card">
-    <div class="toolbar"><button class="${doc ? "" : "primary"}" id="prepBtn">${doc ? "↻ Regenerate prep sheet" : "🎓 Prepare me for the interview"}</button><div class="sp"></div>${doc ? `<span class="muted">${fmtTime(doc.created_at)}</span>` : ""}</div>
+    <div class="toolbar"><button class="${doc ? "" : "primary"}" id="prepBtn">${doc ? `${icon("refresh")} Regenerate prep sheet` : `${icon("cap")} Prepare me for the interview`}</button><div class="sp"></div>${doc ? `<span class="muted">${fmtTime(doc.created_at)}</span>` : ""}</div>
     ${doc ? `<div class="preview">${mdToHtml(doc.content)}</div>` : `<p class="muted">A prep sheet for <b>this</b> role: how to pitch yourself, likely questions with talking points from your own experience, how to handle the gaps the fit score found, stories to have ready, and questions to ask them.${a.fit ? "" : " Score the fit first for better gap coverage."}</p>`}
   </div>`;
 }
 
-const EV_ICON = { translated: "🌐", created: "✨", status: "➜", generated: "📄", questions: "💬", questions_found: "❓", fit: "★", edited: "✎", reextracted: "↻", learned: "🎓", note: "📝", followup: "✓", call: "☎", interview: "🤝" };
+const EV_ICON = { translated: icon("globe"), created: icon("sparkle"), status: icon("arrow"), generated: icon("resume"), questions: icon("prompts"), questions_found: icon("question"), fit: "★ ", edited: icon("pen"), reextracted: icon("refresh"), learned: icon("cap"), note: icon("note"), followup: icon("check"), call: icon("phone"), interview: icon("users") };
 function renderTimeline(a) {
   return `<div class="card">
     <div class="toolbar"><input id="noteTxt" placeholder="Log a note — recruiter name, what they said, salary mentioned…" style="flex:1"><button id="noteAdd">Add note</button></div>
-    ${a.events.map((e) => `<div class="ev"><small>${fmtTime(e.created_at)}</small><b>${EV_ICON[e.kind] || "•"} ${esc(e.kind.replace("_", " "))}</b><span style="flex:1;white-space:pre-wrap">${esc(e.detail)}</span>${["note", "followup", "interview", "call"].includes(e.kind) ? `<button class="ghost icon" data-ev-del="${e.id}" title="Remove">×</button>` : ""}</div>`).join("") || '<span class="muted">No events</span>'}</div>
+    ${a.events.map((e) => `<div class="ev"><small>${fmtTime(e.created_at)}</small><b>${EV_ICON[e.kind] || ""} ${esc(e.kind.replace("_", " "))}</b><span style="flex:1;white-space:pre-wrap">${esc(e.detail)}</span>${["note", "followup", "interview", "call"].includes(e.kind) ? `<button class="ghost icon" data-ev-del="${e.id}" title="Remove">×</button>` : ""}</div>`).join("") || '<span class="muted">No events</span>'}</div>
     <p class="muted">Files: <code>applications/${esc(a.folder)}/</code></p>`;
 }
 
@@ -1382,6 +1428,10 @@ function bind() {
   for (const id of ["#applyCopyAns", "#copyAllAns"]) $(id) && ($(id).onclick = () => copyText(answersText(a)).then((ok) => { if (!ok) return notify("✗ The browser blocked the clipboard — use the Copy buttons on the Questions tab"); $(id).textContent = `Copied ${a.questions.length} ✓`; setTimeout(() => { const b = $(id); if (b) b.textContent = "⎘ Copy all answers"; }, 1500); }));
   document.querySelectorAll("[data-copy-text]").forEach((b) => b.onclick = () => { const doc = a.documents.find((d) => d.id === Number(b.dataset.copyText)); copyText(mdToText(doc.content)).then((ok) => { b.textContent = ok ? "Copied ✓" : "Blocked"; setTimeout(() => (b.textContent = "⎘ Copy text"), 1500); }); });
   $("#applyReveal") && ($("#applyReveal").onclick = () => run("Preparing the files…", async () => { const r = await api("POST", `/api/applications/${a.id}/reveal`, {}); if (!r.ok) notify(`Files are in ${r.path}`); }));
+  $("#applyAutofill") && api("GET", `/api/applications/${a.id}/autofill-bookmarklet`).then(({ href }) => {
+    const el = $("#applyAutofill"); if (!el) return;
+    el.href = href; el.onclick = (e) => { e.preventDefault(); alert("Drag this link to your bookmarks bar, then click it while on this company's application form."); };
+  });
   $("#applyMark") && ($("#applyMark").onclick = () => {
     const body = { status: "applied", applied_at: $("#applyDate").value || localDate() };
     const at = $("#applyNextAt").value, txt = $("#applyNextTxt").value.trim();
@@ -1413,11 +1463,11 @@ function palItems(q) {
   const t = q.trim().toLowerCase();
   const hit = (s) => !t || s.toLowerCase().includes(t);
   const apps = state.apps.filter((a) => !state.pendingDeletes.has(a.id) && hit(`${a.company} ${a.role} ${a.location || ""} ${a.status}`))
-    .slice(0, t ? 8 : 5).map((a) => ({ ic: "📄", text: `${a.company} · ${a.role}`, sub: `${a.status}${a.location ? ` · ${a.location}` : ""}`, run: () => open(a.id) }));
+    .slice(0, t ? 8 : 5).map((a) => ({ ic: icon("resume"), text: `${a.company} — ${a.role}`, sub: `${a.status}${a.location ? ` — ${a.location}` : ""}`, run: () => open(a.id) }));
   const views = [
-    ["🏠", "Home", () => go("home")], ["📡", "Feed", () => go("feed")], ["🎯", "Goals", () => go("goals")], ["⏱", "Tasks", () => go("tasks")],
-    ["＋", "New application — capture a posting", () => { state.newMode = "capture"; go("new"); }], ["✍", "New application — log by hand", () => { state.newMode = "manual"; go("new"); }],
-    ["↻", "Refresh the job feed", () => enqueue("/api/feed/refresh", {})], ["◐", "Toggle dark mode", () => $("#themeBtn").click()], ["?", "Keyboard shortcuts", () => { $("#helpOverlay").hidden = false; }],
+    [icon("home"), "Home", () => go("home")], [icon("feed"), "Feed", () => go("feed")], [icon("goals"), "Goals", () => go("goals")], [icon("tasks"), "Tasks", () => go("tasks")],
+    [icon("plus"), "New application — capture a posting", () => { state.newMode = "capture"; go("new"); }], [icon("pen"), "New application — log by hand", () => { state.newMode = "manual"; go("new"); }],
+    [icon("refresh"), "Refresh the job feed", () => enqueue("/api/feed/refresh", {})], [icon("theme"), "Toggle dark mode", () => $("#themeBtn").click()], [icon("question"), "Keyboard shortcuts", () => { $("#helpOverlay").hidden = false; }],
     ...SETTINGS_SECTIONS.map(([k, ic, n]) => [ic, `Settings → ${n}`, () => go(`settings:${k}`)]),
   ].filter(([, n]) => hit(n)).map(([ic, text, run]) => ({ ic, text, run }));
   return [...apps, ...views].slice(0, 12);

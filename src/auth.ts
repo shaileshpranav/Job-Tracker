@@ -43,6 +43,7 @@ export function isPublicRoute(method: string | undefined, pathname: string): boo
   if (pathname === "/api/login" && method === "POST") return true;
   if (pathname === "/app.js" && method === "GET") return true;
   if (pathname === "/favicon.ico" && method === "GET") return true;
+  if (pathname.startsWith("/fonts/") && method === "GET") return true;
   if (pathname === "/api/bookmarklet" && method === "GET") return true;
   if (pathname === "/api/captures" && (method === "POST" || method === "OPTIONS")) return true;
   return false;
