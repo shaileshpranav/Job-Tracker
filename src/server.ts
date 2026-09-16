@@ -19,7 +19,7 @@ import { HttpError, readJson, send } from "./http.ts";
 import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf } from "./jobs.ts";
-import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
+import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, applyFilters, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
 import { preflight, tasksFor, queueJob } from "./preflight.ts";
 import { pdfFileName, candidateName, DEFAULT_PDF_NAME } from "./filenames.ts";
 import { canonicalUrl } from "./scrape.ts";
@@ -349,7 +349,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     }
     throw new HttpError(400, "Unknown bulk action");
   }
-  if (m("PUT", /^\/api\/feed\/settings$/)) { saveFeedSettings(await readJson(req)); return send(res, 200, { settings: feedSettings(), counts: feedCounts() }); }
+  if (m("PUT", /^\/api\/feed\/settings$/)) {
+    saveFeedSettings(await readJson(req));
+    const applied = applyFilters(); // what is already in the feed follows the new filters immediately
+    return send(res, 200, { settings: feedSettings(), counts: feedCounts(), ...applied });
+  }
   if (m("POST", /^\/api\/feed\/refresh$/)) return send(res, 202, { job: await queueJob("feed_refresh", "Refresh job feed", {}) });
   if (m("POST", /^\/api\/feed\/score$/)) {
     const body = await readJson(req);
@@ -581,6 +585,8 @@ http.createServer(async (req, res) => {
     send(res, status, { error: msg });
   }
 }).listen(PORT, HOST, () => {
+  // Feed filters may have changed while the server was down (or before they applied retroactively).
+  try { const a = applyFilters(); if (a.hidden || a.restored) console.log(`Feed filters: ${a.hidden} hidden, ${a.restored} back`); } catch (e: any) { console.error("Feed filter pass failed:", e.message); }
   // Feed auto-refresh: check every 15 minutes whether the configured interval has elapsed.
   setInterval(() => {
     const h = feedSettings().autoHours;

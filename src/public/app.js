@@ -188,7 +188,7 @@ async function onJobFinished(j) {
   if (j.type === "import") { state.profile = await api("GET", "/api/profile"); return; }
   if (j.type === "feed_refresh" || j.type === "feed_score") {
     const bad = Object.entries(result.report || {}).filter(([, v]) => String(v).startsWith("failed"));
-    notify(`✓ ${j.label} — ${j.type === "feed_refresh" ? `${result.added} new, ${result.translated ? `${result.translated} translated, ` : ""}${result.screened ? `${result.screened} keyword-screened, ` : ""}` : ""}${result.scored} scored, ${result.hot} hot${result.purged ? `, ${result.purged} stale removed` : ""}${bad.length ? ` · ${bad.length} source${bad.length > 1 ? "s" : ""} failed: ${bad.map(([k, v]) => `${k} (${String(v).replace("failed: ", "")})`).join(", ")}` : ""}`);
+    notify(`✓ ${j.label} — ${j.type === "feed_refresh" ? `${result.added} new, ${result.translated ? `${result.translated} translated, ` : ""}${result.screened ? `${result.screened} keyword-screened, ` : ""}` : ""}${result.scored} scored, ${result.hot} hot${result.hidden ? `, ${result.hidden} hidden by filters` : ""}${result.restored ? `, ${result.restored} back` : ""}${result.purged ? `, ${result.purged} stale removed` : ""}${bad.length ? ` · ${bad.length} source${bad.length > 1 ? "s" : ""} failed: ${bad.map(([k, v]) => `${k} (${String(v).replace("failed: ", "")})`).join(", ")}` : ""}`);
     if (state.sel === "feed") { await loadFeed(); } else { const f = await api("GET", "/api/feed?status=open").catch(() => null); state.feedHot = f?.counts?.unseen_hot ?? 0; }
     return;
   }
@@ -262,7 +262,7 @@ function renderNeedsYou() {
 
 // ---------- job feed ----------
 async function loadFeed() {
-  const status = { hot: "open", open: "open", unscored: "open", tracked: "tracked", dismissed: "dismissed" }[state.feedFilter] || "open";
+  const status = { hot: "open", open: "open", unscored: "open", tracked: "tracked", dismissed: "dismissed", hidden: "hidden" }[state.feedFilter] || "open";
   const marking = state.feedFilter === "hot" || state.feedFilter === "open";
   state.feed = await api("GET", `/api/feed?status=${status}${marking ? "&seen=1" : ""}`).catch(() => state.feed);
   state.feedHot = marking ? 0 : state.feed?.counts?.unseen_hot ?? 0; // viewing the list clears the badge
@@ -276,7 +276,7 @@ function renderFeed() {
   if (state.feedFilter === "hot") items = items.filter((i) => i.status === "new" && i.fit_score >= st.minScore);
   if (state.feedFilter === "unscored") items = items.filter((i) => i.fit_score == null);
   const configured = st.boards.length || Object.values(st.aggregators).some(Boolean);
-  const chips = [["hot", `🔥 Hot ${c.hot}${c.unseen_hot ? ` <span class="tb">${c.unseen_hot} new</span>` : ""}`], ["open", `All open ${c.open}`], ["unscored", `Unscored ${c.unscored}`], ["tracked", "Tracked"], ["dismissed", "Dismissed"]];
+  const chips = [["hot", `🔥 Hot ${c.hot}${c.unseen_hot ? ` <span class="tb">${c.unseen_hot} new</span>` : ""}`], ["open", `All open ${c.open}`], ["unscored", `Unscored ${c.unscored}`], ["tracked", "Tracked"], ["dismissed", "Dismissed"], ...(c.hidden ? [["hidden", `Hidden by filters ${c.hidden}`]] : [])];
   const dots = (n) => n == null ? '<span class="muted" title="Not scored yet">–</span>' : `<span class="dots small">${[1,2,3,4,5].map((i) => `<span class="dot ${i <= n ? "on f" + n : ""}"></span>`).join("")}</span>`;
   const atsChip = (i) => i.ats_pct == null ? "" : `<span class="pill ${i.ats_pct >= 60 ? "ok" : i.ats_pct >= st.minAts ? "" : "bad"}" title="Keyword coverage of your base resume against this posting (deterministic)">${i.ats_pct}% keywords</span>`;
   const missing = (i) => { try { const m = JSON.parse(i.ats_missing || "[]"); return m.length ? `<span class="muted">missing: ${m.map(esc).join(", ")}</span>` : ""; } catch { return ""; } };
@@ -290,6 +290,7 @@ function renderFeed() {
       </div>
     </div>
     ${configured ? "" : `<div class="banner">Nothing configured yet — add a few keywords and either company boards or an aggregator below, then Refresh.</div>`}
+    ${state.feedFilter === "hidden" ? `<div class="banner">These no longer pass your filters (locations, exclusions, career levels or keywords). They come back on their own when the filters change; scores are kept. To keep one anyway, track it.</div>` : ""}
     <div class="toolbar" style="margin-bottom:12px"><div class="filters" style="border:0;padding:0">${chips.map(([k, n]) => `<button data-feed-filter="${k}" class="${state.feedFilter === k ? "on" : ""}">${n}</button>`).join("")}</div><div class="sp"></div>
       ${state.feedFilter === "hot" && items.length ? `<button class="ghost" data-bulk="track_hot" title="Create applications for every hot posting (up to 20)">＋ Track all hot</button>` : ""}
       ${state.feedFilter === "open" || state.feedFilter === "unscored" ? `<button class="ghost" data-bulk="dismiss_low" title="Dismiss everything scored below the hot threshold">× Dismiss below ${st.minScore}</button>${c.screened_out ? `<button class="ghost" data-bulk="dismiss_screened" title="Dismiss unscored postings with keyword coverage below ${st.minAts}%">× Dismiss screened-out (${c.screened_out})</button>` : ""}` : ""}
@@ -308,7 +309,7 @@ function renderFeed() {
           : `<button class="primary" data-feed-track="${i.id}" title="Create an application from this posting (full extraction + fit score)">＋ Track</button>`}
         <a href="${esc(i.url)}" target="_blank" rel="noopener"><button class="ghost">Posting ↗</button></a>
         ${i.fit_score == null && i.status === "new" ? `<button class="ghost" data-feed-score1="${i.id}" title="Score this one with the model">★</button>` : ""}
-        ${i.status === "dismissed" ? `<button class="ghost" data-feed-restore="${i.id}">Restore</button><button class="ghost" data-feed-delete="${i.id}" title="Delete permanently">Delete</button>` : `<button class="ghost" data-feed-dismiss="${i.id}" title="Remove from the feed (find it again under Dismissed)">× Remove</button>`}
+        ${i.status === "dismissed" ? `<button class="ghost" data-feed-restore="${i.id}">Restore</button><button class="ghost" data-feed-delete="${i.id}" title="Delete permanently">Delete</button>` : i.status === "hidden" ? `<button class="ghost" data-feed-delete="${i.id}" title="Delete permanently">Delete</button>` : `<button class="ghost" data-feed-dismiss="${i.id}" title="Remove from the feed (find it again under Dismissed)">× Remove</button>`}
       </div>
     </div>`).join("") : `<div class="card muted">${state.feedFilter === "hot" ? `Nothing scored ${st.minScore}+ yet. ${c.unscored ? "Score the unscored postings, or" : "Refresh the feed, or"} lower the threshold below.` : "Nothing here."}</div>`}
     ${state.feedFilter === "dismissed" && items.length ? `<div class="toolbar"><button class="ghost" id="feedPurge">Delete all dismissed</button></div>` : ""}
@@ -1171,7 +1172,12 @@ function bind() {
         adzuna: { appId: $("#fAdzId")?.value ?? undefined, appKey: $("#fAdzKey")?.value ?? undefined },
         minScore: $("#fMin").value, minAts: $("#fMinAts").value, scorePerRefresh: $("#fCap").value, maxAgeDays: $("#fAge").value, autoHours: $("#fAuto").value };
       if (body.adzuna.appId === undefined) delete body.adzuna;
-      run("Saving feed settings…", async () => { await api("PUT", "/api/feed/settings", body); await loadFeed(); });
+      run("Saving feed settings…", async () => {
+        const r = await api("PUT", "/api/feed/settings", body);
+        await loadFeed();
+        const parts = [r.hidden ? `${r.hidden} posting${r.hidden === 1 ? "" : "s"} hidden by the new filters` : "", r.restored ? `${r.restored} back` : ""].filter(Boolean);
+        notify(`✓ Feed settings saved${parts.length ? " — " + parts.join(", ") : ""}`);
+      });
     });
   }
   $("#gSave") && ($("#gSave").onclick = () => {

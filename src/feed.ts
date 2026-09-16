@@ -338,14 +338,72 @@ export function isFresh(p: Posting, maxAgeDays: number) {
 }
 /** Same role at the same company across sources (LinkedIn vs board) collapses to one item. */
 export const dedupeKey = (p: { company: string; title: string }) => `${norm(p.company).replace(/\b(inc|ltd|llc|gmbh|pte|co|corp|corporation|limited)\b/g, "").trim()}|${norm(p.title).replace(/\((?:m\/w\/d|f\/m\/d|all genders|remote|hybrid)\)|\b(remote|hybrid|onsite)\b/g, "").trim()}`.replace(/\s+/g, " ");
+// A country on either list also matches the short forms postings actually use.
+const COUNTRY_ALIASES: Record<string, string[]> = {
+  "united states": ["usa", "us", "u s", "u s a", "united states of america", "us only", "usa only"],
+  "united kingdom": ["uk", "u k", "great britain", "britain", "england", "scotland", "wales", "northern ireland"],
+  "germany": ["deutschland"], "netherlands": ["the netherlands", "holland"], "denmark": ["danmark"],
+  "switzerland": ["schweiz", "suisse", "svizzera"], "spain": ["españa", "espana"], "italy": ["italia"], "sweden": ["sverige"],
+  "austria": ["österreich", "osterreich"], "belgium": ["belgië", "belgie", "belgique"], "czech republic": ["czechia"],
+  "united arab emirates": ["uae", "dubai", "abu dhabi"], "hong kong": ["hk"], "singapore": ["sg"],
+};
+const US_STATES = new Set("AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC".split(" "));
+const OTHER_COUNTRY = /\b(india|canada|australia|germany|deutschland|uk|united kingdom|mexico|brazil|china|japan|france|spain|italy|netherlands|ireland|singapore|philippines|nigeria|south africa|argentina|colombia|chile|peru|pakistan|bangladesh|malaysia|indonesia|vietnam|new zealand|europe|emea|apac|latam)\b/i;
+// State codes that are also common country codes ("Berlin, DE", "Bengaluru, IN", "Toronto, CA") only count with a US hint or an unfamiliar city.
+const AMBIGUOUS_STATE = new Set(["DE", "IN", "CA", "GA", "AL", "AR", "CO", "ID", "MA", "MD", "ME", "MT", "NE", "PA", "SC", "TN"]);
+const NON_US_CITY = /\b(berlin|munich|münchen|hamburg|frankfurt|cologne|köln|stuttgart|düsseldorf|leipzig|dresden|hannover|nuremberg|nürnberg|bremen|bengaluru|bangalore|chennai|mumbai|delhi|hyderabad|pune|kolkata|gurgaon|gurugram|noida|toronto|vancouver|montreal|calgary|ottawa|edmonton|waterloo|tbilisi|tirana|buenos aires|bogotá|bogota|medellín|medellin|jakarta|rabat|casablanca|chișinău|chisinau|podgorica|valletta|niamey|panama city|victoria|tunis)\b/i;
+/** "Austin, TX" / "New York, NY, USA" — a US state code after the city, unless the text points elsewhere. */
+const looksAmerican = (loc: string) => {
+  const m = /,\s*([A-Z]{2})(?:\s*,?\s*(USA?|U\.S\.A?\.?|United States))?\s*$/.exec(loc.trim());
+  if (!m || !US_STATES.has(m[1]) || OTHER_COUNTRY.test(loc)) return false;
+  return !AMBIGUOUS_STATE.has(m[1]) || !!m[2] || !NON_US_CITY.test(loc);
+};
+const words = (s: string) => ` ${norm(s).replace(/\./g, " ").replace(/\s+/g, " ").trim()} `;
+const hasPhrase = (hay: string, t: string) => t.length <= 3 ? hay.includes(` ${t} `) : hay.includes(t); // short terms ("us", "ny") must be whole words
+/** Does a posting's location satisfy one term from the settings? Substring for places, aliases for countries. */
+export function locationHas(location: string, term: string): boolean {
+  const l = words(location), t = words(term).trim();
+  if (!t) return false;
+  if (hasPhrase(l, t)) return true;
+  if (COUNTRY_ALIASES[t]?.some((a) => hasPhrase(l, words(a).trim()))) return true;
+  if (t === "united states" && looksAmerican(location)) return true;
+  for (const [country, aliases] of Object.entries(COUNTRY_ALIASES)) // the user typed the alias ("USA"), the posting the country
+    if (aliases.includes(t) && (l.includes(country) || (country === "united states" && looksAmerican(location)))) return true;
+  return false;
+}
 export function matchesLocation(p: Posting, locations: string[]) {
   if (!locations.length) return true;
-  const loc = norm(p.location);
-  return locations.some((l) => { const n = norm(l).trim(); return (n === "remote" && p.remote) || loc.includes(n); });
+  return locations.some((l) => (norm(l).trim() === "remote" && p.remote) || locationHas(p.location ?? "", l));
 }
+/** Whole-word (plural-tolerant) on the title so "intern" doesn't hide "Internal Tools"; locations via locationHas. */
 export function isExcluded(p: Posting, exclude: string[]) {
-  const hay = norm(`${p.title} ${p.location}`);
-  return exclude.some((x) => hay.includes(norm(x).trim()));
+  const titles = [p.title, p.title_en].filter(Boolean).map((t) => words(t!));
+  return exclude.some((x) => {
+    const t = words(x).trim();
+    if (!t) return false;
+    const re = new RegExp(`(^| )${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(s|es)?( |$)`);
+    return titles.some((h) => re.test(h)) || locationHas(p.location ?? "", x);
+  });
+}
+
+/**
+ * Re-check what is already in the feed against the current filters: a term added later must
+ * hide postings that are already there, and loosening a filter brings them back. Hidden items
+ * keep their scores and come back automatically; they are not dismissed.
+ */
+export function applyFilters(s = feedSettings()) {
+  const rows = db.prepare("SELECT id, status, title, title_en, location, remote, level, description FROM feed_items WHERE status IN ('new', 'hidden')").all() as any[];
+  const hide = db.prepare("UPDATE feed_items SET status = 'hidden' WHERE id = ?"), show = db.prepare("UPDATE feed_items SET status = 'new' WHERE id = ?");
+  let hidden = 0, restored = 0;
+  for (const r of rows) {
+    const p = { title: r.title, title_en: r.title_en, location: r.location ?? "", remote: !!r.remote, description: r.description ?? "" } as Posting;
+    const ok = matchesLocation(p, s.locations) && !isExcluded(p, s.exclude)
+      && matchesLevel((r.level as Level) || classifyLevel(r.title_en || r.title), s.levels)
+      && matchesKeywords(r.title_en || r.title, s.keywords, s.matchIn === "text" ? p.description : "");
+    if (!ok && r.status === "new") { hide.run(r.id); hidden++; }
+    else if (ok && r.status === "hidden") { show.run(r.id); restored++; }
+  }
+  return { hidden, restored };
 }
 
 // ---------- store ----------
@@ -367,7 +425,7 @@ export function insertNew(postings: Posting[]): number {
 /** Drop stale, untouched items so the feed doesn't grow forever. */
 export function purgeStale(maxAgeDays: number) {
   const days = Math.max(maxAgeDays * 2, 45);
-  return Number(db.prepare(`DELETE FROM feed_items WHERE status = 'new' AND created_at < datetime('now', ?) AND (posted_at IS NULL OR posted_at < date('now', ?))`).run(`-${days} days`, `-${days} days`).changes);
+  return Number(db.prepare(`DELETE FROM feed_items WHERE status IN ('new', 'hidden') AND created_at < datetime('now', ?) AND (posted_at IS NULL OR posted_at < date('now', ?))`).run(`-${days} days`, `-${days} days`).changes);
 }
 export function markSeen(ids: number[]) {
   if (!ids.length) return;
@@ -375,7 +433,7 @@ export function markSeen(ids: number[]) {
 }
 
 export function listFeed(status: string | null = null) {
-  const where = status ? "WHERE status = ?" : "WHERE status != 'dismissed'";
+  const where = status ? "WHERE status = ?" : "WHERE status NOT IN ('dismissed', 'hidden')";
   return db.prepare(`SELECT id, source, company, title, title_en, lang, level, location, remote, salary, url, posted_at, fit_score, fit_reason, ats_pct, ats_missing, seen, status, application_id, created_at, length(description) AS desc_len, substr(description, 1, 700) AS excerpt FROM feed_items ${where} ORDER BY (fit_score IS NULL), fit_score DESC, ats_pct DESC, posted_at DESC, id DESC LIMIT 500`).all(...(status ? [status] : []));
 }
 export const getFeedItem = (id: number) => db.prepare("SELECT * FROM feed_items WHERE id = ?").get(id) as any;
@@ -384,6 +442,6 @@ export const unscoredIds = (limit: number, minAts = 0) => (db.prepare("SELECT id
 export const unscreenedIds = () => (db.prepare("SELECT id FROM feed_items WHERE ats_pct IS NULL AND status = 'new' ORDER BY id DESC LIMIT 2000").all() as { id: number }[]).map((r) => r.id);
 export function feedCounts() {
   const s = feedSettings();
-  const r = db.prepare("SELECT SUM(status='new' AND fit_score >= ?) AS hot, SUM(status='new' AND fit_score >= ? AND seen = 0) AS unseen_hot, SUM(status='new' AND fit_score IS NULL) AS unscored, SUM(status='new' AND fit_score IS NULL AND ats_pct IS NOT NULL AND ats_pct < ?) AS screened_out, SUM(status='new') AS open FROM feed_items").get(s.minScore, s.minScore, s.minAts) as any;
-  return { hot: r.hot ?? 0, unseen_hot: r.unseen_hot ?? 0, unscored: r.unscored ?? 0, screened_out: r.screened_out ?? 0, open: r.open ?? 0 };
+  const r = db.prepare("SELECT SUM(status='new' AND fit_score >= ?) AS hot, SUM(status='new' AND fit_score >= ? AND seen = 0) AS unseen_hot, SUM(status='new' AND fit_score IS NULL) AS unscored, SUM(status='new' AND fit_score IS NULL AND ats_pct IS NOT NULL AND ats_pct < ?) AS screened_out, SUM(status='new') AS open, SUM(status='hidden') AS hidden FROM feed_items").get(s.minScore, s.minScore, s.minAts) as any;
+  return { hot: r.hot ?? 0, unseen_hot: r.unseen_hot ?? 0, unscored: r.unscored ?? 0, screened_out: r.screened_out ?? 0, open: r.open ?? 0, hidden: r.hidden ?? 0 };
 }
