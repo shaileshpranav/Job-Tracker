@@ -7,7 +7,7 @@ import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, type Application } from "./db.ts";
 import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
 import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, interviewPrep, quickFit, translateTitles, translateJob, type JobExtract } from "./ai.ts";
-import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, matchesLevel, classifyLevel, detectLang, isExcluded, isFresh, insertNew, purgeStale, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, AGGREGATORS, type Aggregator, type Posting } from "./feed.ts";
+import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, matchesLevel, classifyLevel, detectLang, isExcluded, isFresh, insertNew, purgeStale, applyFilters, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, AGGREGATORS, type Aggregator, type Posting } from "./feed.ts";
 import { atsCheck } from "./ats.ts";
 import { compilePdf } from "./latex.ts";
 import { registerJob, enqueue, NeedsYou } from "./queue.ts";
@@ -161,6 +161,7 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
   }
   const added = insertNew(kept);
   const purged = purgeStale(s.maxAgeDays);
+  const { hidden, restored } = applyFilters(s); // settings may have changed since these items arrived
   markFeedRefreshed();
   let scored = 0, hot = 0, screened = 0;
   const bases = hasAnyResume() ? await loadBases() : [];
@@ -185,7 +186,7 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
       }
     }
   }
-  return { added, scored, hot, screened, purged, translated, report };
+  return { added, scored, hot, screened, purged, translated, hidden, restored, report };
 });
 
 registerJob("feed_score", async ({ ids }, _job, progress) => {
