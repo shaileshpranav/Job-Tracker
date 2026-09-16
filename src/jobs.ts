@@ -21,7 +21,7 @@ function mustApp(id: string): Application {
   return app;
 }
 
-export function createApplication(job: JobExtract, url: string | null, sourceText: string): Application {
+export function createApplication(job: JobExtract, url: string | null, sourceText: string, note?: string): Application {
   const info = db.prepare(
     `INSERT INTO applications (company, role, location, url, salary, description, requirements, source_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(job.company, job.role, job.location || null, url, job.salary || null, job.description, JSON.stringify(job.requirements), sourceText);
@@ -30,7 +30,7 @@ export function createApplication(job: JobExtract, url: string | null, sourceTex
   db.prepare("UPDATE applications SET folder = ? WHERE id = ?").run(folder, id);
   fs.mkdirSync(path.join(APPS_DIR, folder), { recursive: true });
   writeJobFile(getApp(id)!);
-  logEvent(id, "created", url ? `Captured from ${url}` : "Entered manually");
+  logEvent(id, "created", note ?? (url ? `Captured from ${url}` : "Entered manually"));
   if (job.application_questions.length) {
     logEvent(id, "questions_found", job.application_questions.join("\n"));
   }

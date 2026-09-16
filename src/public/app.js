@@ -2,7 +2,8 @@ const STATUSES = ["saved", "applied", "screening", "interview", "offer", "reject
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: true, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null, settingsSection: "model" };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: false, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null, settingsSection: "model", newMode: "capture", viewDoc: null, headOpen: false, statusOpen: false, feedCursor: -1, noticeAction: null, pendingDeletes: new Set() };
+try { state.atsOpen = localStorage.getItem("atsOpen") === "1"; } catch { state.atsOpen = false; }
 try { state.settingsSection = localStorage.getItem("settingsSection") || "model"; } catch {}
 
 // ---------- drafts: unsaved edits survive tab switches, background re-renders and reloads ----------
@@ -166,7 +167,19 @@ async function copyText(text) {
   const ta = document.createElement("textarea"); ta.value = text; ta.style.cssText = "position:fixed;opacity:0"; document.body.appendChild(ta); ta.focus(); ta.select();
   let ok = false; try { ok = document.execCommand("copy"); } catch {} ta.remove(); return ok;
 }
-function notify(text) { state.notice = text; render(true); clearTimeout(notify.t); notify.t = setTimeout(() => { state.notice = null; render(true); }, 3500); }
+function notify(text, action = null, ms = 3500) {
+  state.notice = text; state.noticeAction = action; render(true);
+  clearTimeout(notify.t); notify.t = setTimeout(() => { state.notice = null; state.noticeAction = null; render(true); }, ms);
+}
+// Destructive actions happen on screen at once and on the server a few seconds later, so the
+// notice can offer Undo instead of a confirm() dialog: apply() changes local state, commit()
+// talks to the server when the window closes, revert() puts things back if Undo is clicked.
+function undoable({ text, apply, commit, revert, delay = 6000 }) {
+  let done = false;
+  apply();
+  const timer = setTimeout(() => { if (!done) { done = true; commit().catch((e) => { state.err = e.message; revert(); render(true); }); } }, delay);
+  notify(text, { label: "Undo", fn: () => { if (done) return; done = true; clearTimeout(timer); state.notice = null; state.noticeAction = null; revert(); } }, delay);
+}
 
 async function refreshJobs() {
   const prev = new Map(state.jobs.map((j) => [j.id, j.status]));
@@ -199,8 +212,8 @@ async function onJobFinished(j) {
   }
   if (state.app && state.app.id === (j.application_id ?? result.application_id)) {
     state.app = await api("GET", `/api/applications/${state.app.id}`);
-    if (j.type === "generate") { state.tab = result.what === "cover_letter" ? "cover_letter" : "resume"; state.docMode = "preview"; state.tex = null; state.ats = null; }
-    if (j.type === "condense") { state.docMode = "preview"; state.tex = null; }
+    if (j.type === "generate") { state.tab = result.what === "cover_letter" ? "cover_letter" : "resume"; state.docMode = "preview"; state.tex = null; state.viewDoc = null; state.ats = null; }
+    if (j.type === "condense") { state.docMode = "preview"; state.tex = null; state.viewDoc = null; }
     if (j.type === "prep") state.tab = "prep";
   }
 }
@@ -295,7 +308,7 @@ function renderFeed() {
       ${state.feedFilter === "hot" && items.length ? `<button class="ghost" data-bulk="track_hot" title="Create applications for every hot posting (up to 20)">＋ Track all hot</button>` : ""}
       ${state.feedFilter === "open" || state.feedFilter === "unscored" ? `<button class="ghost" data-bulk="dismiss_low" title="Dismiss everything scored below the hot threshold">× Dismiss below ${st.minScore}</button>${c.screened_out ? `<button class="ghost" data-bulk="dismiss_screened" title="Dismiss unscored postings with keyword coverage below ${st.minAts}%">× Dismiss screened-out (${c.screened_out})</button>` : ""}` : ""}
     </div>
-    ${items.length ? items.map((i) => `<div class="feed-item ${i.fit_score >= st.minScore ? "hot" : ""} ${!i.seen && i.status === "new" ? "unseen" : ""}">
+    ${items.length ? items.map((i, idx) => `<div class="feed-item ${i.fit_score >= st.minScore ? "hot" : ""} ${!i.seen && i.status === "new" ? "unseen" : ""} ${idx === state.feedCursor ? "cur" : ""}" data-feed-idx="${idx}" data-feed-id="${i.id}">
       <div class="feed-score">${dots(i.fit_score)}${i.fit_score != null ? `<b>${i.fit_score}</b>` : ""}</div>
       <div class="feed-main">
         <div class="feed-title">${!i.seen && i.status === "new" ? '<span class="newdot" title="New since you last looked"></span>' : ""}<b title="${i.title_en ? `Original: ${esc(i.title)}` : ""}">${esc(i.title_en || i.title)}</b>${i.title_en ? ` <span class="pill" title="Translated from ${esc((i.lang || "").toUpperCase())} — original: ${esc(i.title)}">${esc((i.lang || "").toUpperCase())} → EN</span>` : i.lang && i.lang !== "en" ? ` <span class="pill warn" title="Not translated">${esc(i.lang.toUpperCase())}</span>` : ""} <span class="muted">at</span> ${esc(i.company)}</div>
@@ -451,7 +464,7 @@ async function open(id) {
   try { app = await api("GET", `/api/applications/${id}`); }
   catch (e) { notify(`✗ That application no longer exists (${e.message}).`); await loadList(); if (state.sel === "feed") await loadFeed(); render(true); return; }
   if (state.app?.id !== id) dropPdf();
-  state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = app; state.err = null; state.applyOpen = false;
+  state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.viewDoc = null; state.app = app; state.err = null; state.applyOpen = false; state.headOpen = false; state.statusOpen = false;
   pruneDrafts(app);
   render(true);
 }
@@ -466,7 +479,7 @@ function render(force = false) {
   renderSidebar(); bindSidebar();
   document.body.classList.toggle("detail", state.sel !== null);
   const back = `<button class="back" id="backBtn">← Applications</button>`;
-  const notice = (state.notice ? `<div class="notice ${state.celebrate ? "celebrate" : ""}">${esc(state.notice)}</div>` : "") + renderNeedsYou();
+  const notice = (state.notice ? `<div class="notice ${state.celebrate ? "celebrate" : ""}"><span>${esc(state.notice)}</span>${state.noticeAction ? `<button id="noticeAct">${esc(state.noticeAction.label)}</button>` : ""}</div>` : "") + renderNeedsYou();
   let html;
   if (state.sel === "tasks") html = back + notice + renderTasks();
   else if (state.sel === "goals") html = back + notice + renderGoals();
@@ -520,7 +533,7 @@ function renderSidebar() {
     .map((s) => `<button data-f="${s}" class="${state.filter === s ? "on" : ""}">${s} ${counts[s] || 0}</button>`).join("")
     + (due ? `<button data-f="due" class="due ${state.filter === "due" ? "on" : ""}">⏰ follow up ${due}</button>` : "");
   const q = state.search.trim().toLowerCase();
-  let rows = state.apps.filter((a) => (state.filter === "all" || (state.filter === "due" ? a.due : a.status === state.filter)) && (!q || `${a.company} ${a.role} ${a.location || ""}`.toLowerCase().includes(q)));
+  let rows = state.apps.filter((a) => !state.pendingDeletes.has(a.id) && (state.filter === "all" || (state.filter === "due" ? a.due : a.status === state.filter)) && (!q || `${a.company} ${a.role} ${a.location || ""}`.toLowerCase().includes(q)));
   const by = { recent: (a, b) => b.updated_at.localeCompare(a.updated_at), fit: (a, b) => (b.fit_score ?? 0) - (a.fit_score ?? 0) || b.updated_at.localeCompare(a.updated_at), applied: (a, b) => (b.applied_at || "").localeCompare(a.applied_at || "") || b.updated_at.localeCompare(a.updated_at), company: (a, b) => a.company.localeCompare(b.company) };
   rows = [...rows].sort(by[state.sort] || by.recent);
   $("#sortSeg").innerHTML = [["recent", "Recent"], ["fit", "Fit"], ["applied", "Applied"], ["company", "A–Z"]].map(([k, n]) => `<button data-sort="${k}" class="${state.sort === k ? "on" : ""}">${n}</button>`).join("");
@@ -741,9 +754,27 @@ function renderHome() {
 function renderNew() {
   const d = state.dup;
   const dupBox = d ? `<div class="banner dup"><div><b>Already tracked:</b> ${esc(d.existing.company)} · ${esc(d.existing.role)} <span class="pill ${esc(d.existing.status)}">${esc(d.existing.status)}</span> <span class="muted">${d.existing.applied_at ? `applied ${d.existing.applied_at}` : `captured ${esc(String(d.existing.created_at).slice(0, 10))}`}</span></div>
-    <div class="toolbar" style="margin:0"><button class="primary" data-open-app="${d.existing.id}">Open it</button><button id="dupForce" title="Create a second application for the same posting anyway">Capture anyway</button><button class="ghost" id="dupDismiss">Dismiss</button></div></div>` : "";
+    <div class="toolbar" style="margin:0"><button class="primary" data-open-app="${d.existing.id}">Open it</button><button id="dupForce" title="Create a second application for the same posting anyway">${d.manual ? "Add anyway" : "Capture anyway"}</button><button class="ghost" id="dupDismiss">Dismiss</button></div></div>` : "";
+  const manual = state.newMode === "manual";
+  const modeSeg = `<div class="seg" style="margin-bottom:14px"><button data-new-mode="capture" class="${manual ? "" : "on"}">Capture a posting</button><button data-new-mode="manual" class="${manual ? "on" : ""}">Log by hand</button></div>`;
+  if (manual) return `${busy()}${errBox()}${dupBox}
+    <div class="card"><h2>New application</h2>${modeSeg}
+      <p class="muted" style="margin-top:0">For things the tracker didn't see — an Easy Apply, a referral, something you applied to before. No model runs; add a posting URL or description later if you want documents generated.</p>
+      <div class="grid2">
+        <div class="field"><label>Company *</label><input id="mCompany" data-draft="new:0:mcompany" autofocus></div>
+        <div class="field"><label>Role *</label><input id="mRole" data-draft="new:0:mrole"></div>
+        <div class="field"><label>Location</label><input id="mLocation" data-draft="new:0:mlocation" placeholder="Singapore / Remote"></div>
+        <div class="field"><label>Posting URL</label><input id="mUrl" data-draft="new:0:murl" placeholder="https://…"></div>
+      </div>
+      <div class="field"><label>Status</label><div class="seg status-seg" style="margin:0" id="mStatus">${STATUSES.map((st) => `<button data-mstatus="${st}" class="${st === (state.newStatus || "applied") ? "on " + st : ""}">${st}</button>`).join("")}</div></div>
+      <div class="grid2">
+        <div class="field"><label>Applied on</label><input type="date" id="mApplied" value="${localDate()}"></div>
+        <div class="field"><label>Notes</label><input id="mNotes" data-draft="new:0:mnotes" placeholder="referral from …, recruiter name"></div>
+      </div>
+      <div class="toolbar" style="margin-top:4px"><button class="primary" id="manualBtn">Add application</button><button class="ghost" id="cancelNew">Cancel</button></div>
+    </div>`;
   return `${busy()}${errBox()}${dupBox}
-    <div class="card"><h2>New application</h2>
+    <div class="card"><h2>New application</h2>${modeSeg}
       <div class="field"><label>Job posting URL</label><input id="nUrl" placeholder="https://…" autofocus data-draft="new:0:url"></div>
       <details ${hasDraft("new:0:desc") || hasDraft("new:0:company") || hasDraft("new:0:role") ? "open" : ""}><summary class="muted">Or paste the description (for pages that block scraping)</summary>
         <div class="grid2" style="margin-top:10px">
@@ -769,24 +800,33 @@ function renderDetail(a) {
   };
   return `${errBox()}
     <div class="card fade">
-      <div class="toolbar" style="margin:0">
+      <div class="toolbar head-row" style="margin:0">
         <div class="head-title"><h2>${esc(a.role)}</h2><div class="sub">${esc(a.company)}${a.location ? ` · ${esc(a.location)}` : ""}${a.salary ? ` · ${esc(a.salary)}` : ""} ${a.url ? `· <a href="${esc(a.url)}" target="_blank" rel="noopener">posting ↗</a>` : ""}</div></div>
         <div class="sp"></div>
         <button id="delBtn" class="ghost icon" title="Delete application">🗑</button>
       </div>
-      <div class="toolbar" style="margin:8px 0 12px;gap:6px 12px">
-        <div class="seg status-seg" style="margin:0">${STATUSES.map((s) => `<button data-status="${s}" class="${s === a.status ? "on " + s : ""}">${s}</button>`).join("")}</div>
+      ${(() => {
+        const phone = isPhone(), due = !!a.next_action_at && a.next_action_at <= localDate();
+        // On a phone the seven status pills and the date controls are folded behind one line each.
+        const statusRow = phone && !state.statusOpen
+          ? `<button class="status-cur ${a.status}" id="statusOpen" title="Change status">${a.status} ▾</button>`
+          : `<div class="seg status-seg" style="margin:0">${STATUSES.map((s) => `<button data-status="${s}" class="${s === a.status ? "on " + s : ""}">${s}</button>`).join("")}</div>`;
+        const summary = [a.applied_at ? `Applied ${a.applied_at}` : "Not applied yet", a.next_action_at ? `<span class="${due ? "due-txt" : ""}">⏰ ${esc(a.next_action || "next action")} · ${a.next_action_at}${due ? " · due" : ""}</span>` : "", a.notes ? `📝 ${esc(a.notes.slice(0, 60))}${a.notes.length > 60 ? "…" : ""}` : ""].filter(Boolean).join(" · ");
+        const meta = `<div class="head-meta">
+          <label>Applied <input type="date" id="applied" value="${a.applied_at || ""}"></label>
+          <label class="${due ? "due" : ""}">${due ? "⏰ Due" : "Next action"} <input type="date" id="nextAt" value="${a.next_action_at || ""}"><input id="nextTxt" placeholder="what, e.g. chase recruiter" value="${esc(a.next_action || "")}"></label>
+          <span><button data-log="followup" title="Logs a follow-up today and clears the next action">✓ Followed up</button> <button data-log="call" class="ghost">☎ Call</button> <button data-log="interview" class="ghost">🤝 Interview</button></span>
+          ${a.followed_up_at ? `<span class="muted">last follow-up ${a.followed_up_at}</span>` : ""}
+        </div>
+        <textarea id="notes" class="notes-line" placeholder="Notes…" rows="1" data-draft="notes:${a.id}:x">${esc(a.notes)}</textarea>`;
+        return `<div class="toolbar" style="margin:8px 0 12px;gap:6px 12px">
+        ${statusRow}
         <div class="sp"></div>
         <button id="applyBtn" class="${state.applyOpen ? "on" : a.status === "saved" ? "primary" : "ghost"}" title="Everything you need to submit this application in one place: PDFs, answers, the files folder, and marking it applied">${a.status === "saved" ? "🚀 Apply" : "📦 Apply pack"}</button>
       </div>
       ${state.applyOpen ? renderApply(a) : ""}
-      <div class="head-meta">
-        <label>Applied <input type="date" id="applied" value="${a.applied_at || ""}"></label>
-        <label>Next action <input type="date" id="nextAt" value="${a.next_action_at || ""}"><input id="nextTxt" placeholder="what, e.g. chase recruiter" value="${esc(a.next_action || "")}"></label>
-        <span><button data-log="followup" title="Logs a follow-up today and clears the next action">✓ Followed up</button> <button data-log="call" class="ghost">☎ Call</button> <button data-log="interview" class="ghost">🤝 Interview</button></span>
-        ${a.followed_up_at ? `<span class="muted">last follow-up ${a.followed_up_at}</span>` : ""}
-      </div>
-      <textarea id="notes" class="notes-line" placeholder="Notes…" rows="1" data-draft="notes:${a.id}:x">${esc(a.notes)}</textarea>
+      ${phone && !state.headOpen ? `<button class="head-summary" id="headOpen" title="Dates, follow-ups and notes">${summary} <span class="muted">· edit ▾</span></button>` : meta}`;
+      })()}
     </div>
     <div class="tabs">${tabs.map((t) => `<button data-tab="${t}" class="${state.tab === t ? "on" : ""}">${names[t]}${badge[t] ? `<span class="tb">${badge[t]}</span>` : ""}</button>`).join("")}</div>
     ${jobBadge(a.id, { job: ["reextract", "fit"], resume: ["generate", "condense", "learn"], cover_letter: ["generate", "learn"], questions: ["questions"], prep: ["prep"], timeline: [] }[state.tab].concat(state.tab === "job" ? ["translate"] : []))}
@@ -865,15 +905,18 @@ function renderJob(a) {
       <button data-edit-job>✎ Edit</button></div>
     ${!a.requirements.length || !a.location ? `<div class="banner" style="margin:8px 0">Looks thin (${[!a.location && "no location", !a.salary && "no salary", !a.requirements.length && "no requirements"].filter(Boolean).join(", ")}). The page may have been a JavaScript shell — use the <b>Save to Job Tracker</b> bookmarklet from the home screen on the posting, or paste the description via ✎ Edit, then ↻ Re-extract.</div>` : ""}
     <div>${a.requirements.map((r) => `<span class="req">${esc(r)}</span>`).join("") || '<span class="muted">none extracted</span>'}</div>
-    <h3 style="margin-top:16px">Description</h3><div class="doc" style="min-height:0">${esc(a.description)}</div>
+    <h3 style="margin-top:16px">Description</h3><div class="preview desc">${mdToHtml(a.description || "")}</div>
   </div>`;
 }
 
 function renderDoc(a, kind) {
   const docs = a.documents.filter((d) => d.kind === kind);
-  const doc = docs[0];
+  const latest = docs[0];
+  const doc = (state.viewDoc && docs.find((d) => d.id === state.viewDoc)) || latest; // an older version can be viewed read-only
+  const old = doc && doc !== latest;
+  const vOf = (d) => docs.length - docs.indexOf(d);
   const label = kind === "resume" ? "resume" : "cover letter";
-  const mode = state.docMode;
+  const mode = old && !["preview", "pdf", "diff"].includes(state.docMode) ? "preview" : state.docMode;
   const fit = doc && kind === "resume" ? (doc.size.words <= a.one_page.words && doc.size.lines <= a.one_page.lines) : null;
   const overflow = doc && kind === "resume" && (doc.pages && doc.pdf_current ? doc.pages > 1 : !fit);
   const pageInfo = doc && doc.pages && doc.pdf_current
@@ -912,7 +955,9 @@ function renderDoc(a, kind) {
     }
     else body = `<div class="preview ${kind}">${mdToHtml(doc.content)}</div>`;
   } else body = `<p class="muted">No ${label} yet. Generation uses <code>profile/resume.md</code> + this job's description${kind === "resume" ? ", and is constrained to one page" : ""}.</p>`;
-  const modes = [["preview", "Preview"], ...(a.latex ? [["pdf", "PDF"]] : []), ["edit", "Edit"], ...(a.latex ? [["tex", "LaTeX"]] : []), ["diff", "Compare"]];
+  const modes = [["preview", "Preview"], ...(a.latex ? [["pdf", "PDF"]] : []), ...(old ? [] : [["edit", "Edit"], ...(a.latex ? [["tex", "LaTeX"]] : [])]), ["diff", "Compare"]];
+  const versions = docs.length > 1 ? `<details class="versions"><summary title="Every version is kept — view an earlier one or bring it back as the newest">v${vOf(doc)} of ${docs.length} ▾</summary><div class="versions-list">${docs.map((d) => `<div class="version-row ${d === doc ? "cur" : ""}"><b>v${vOf(d)}</b><span class="muted">${fmtTime(d.created_at)} · ${d.size.words} words${d.edited ? " · edited" : ""}${d.instructions ? ` · ✎ ${esc(d.instructions.slice(0, 40))}${d.instructions.length > 40 ? "…" : ""}` : ""}</span><div class="sp"></div>${d === doc ? '<span class="pill accent">viewing</span>' : `<button class="ghost" data-view-doc="${d.id}">View</button>`}</div>`).join("")}</div></details>` : `<span class="v">v${docs.length}</span>`;
+  const oldBox = old ? `<div class="banner draft"><span>Viewing <b>v${vOf(doc)}</b> of ${docs.length} (${fmtTime(doc.created_at)}). Editing happens on the latest version.</span><button class="primary" id="docRestore" data-doc="${doc.id}" title="Copies this text into a new version v${docs.length + 1}; nothing is overwritten">↩ Restore as v${docs.length + 1}</button><button class="ghost" id="docLatest">Back to latest</button></div>` : "";
   const ats = kind === "resume" ? renderAts(a, doc) : "";
   // Free-text steering for the next draft; prefilled with what produced the current version.
   const noteKey = `${a.id}:${kind}`, note = state.genNote[noteKey] ?? doc?.instructions ?? "";
@@ -923,11 +968,11 @@ function renderDoc(a, kind) {
         ${kind === "resume" ? `<button data-gen="both" title="Resume first, then a cover letter based on it">Resume + cover letter</button>` : ""}
       </div>
       <input id="genNote" class="gen-note" value="${esc(note)}" placeholder="Instructions for the next draft — e.g. shorter · lead with the Monta work · mention my visa status" title="Optional. Steers the next draft (and the cover letter when generating both); kept with the version it produces. Enter to generate."></div>
-      ${doc ? `<div class="doc-group"><span>Refine</span><div>
+      ${doc && !old ? `<div class="doc-group"><span>Refine</span><div>
         ${kind === "resume" ? `<button data-condense="${doc.id}" class="${overflow ? "primary" : ""}" title="Ask the model to cut this version down to one page (saves as a new version)">✂ Condense</button>` : ""}
         <button data-learn="${doc.id}" ${doc.edited ? "" : "disabled"} title="${doc.edited ? "Compare your edits with the generated version and update the formatting rules for future " + label + "s (content is ignored)" : "Edit and save the Markdown first, then the app can learn your formatting preferences"}">🎓 Learn my format</button>
-      </div></div>
-      <div class="doc-right">
+      </div></div>` : ""}
+      ${doc ? `<div class="doc-right">
       <div class="doc-group"><span>View</span><div><div class="seg">${modes.map(([m, n]) => `<button data-docmode="${m}" class="${mode === m ? "on" : ""}">${n}</button>`).join("")}</div></div></div>
       <div class="doc-group"><span>Export</span><div>
         ${a.latex ? `<a href="/doc/${doc.id}.pdf" target="_blank"><button class="primary">⬇ PDF</button></a><a href="/doc/${doc.id}" target="_blank"><button class="ghost" title="Browser print fallback">Print</button></a>` : `<a href="/doc/${doc.id}" target="_blank"><button class="primary">Print / Save as PDF</button></a>`}
@@ -935,9 +980,9 @@ function renderDoc(a, kind) {
       </div></div>
       </div>` : ""}
     </div>
-    ${parked}${parkedTex}${staleBox}
+    ${oldBox}${parked}${parkedTex}${staleBox}
     ${ats}
-    ${doc ? `<div class="doc-meta"><span class="v">v${docs.length}</span><span>${fmtTime(doc.created_at)}</span><span>·</span>${sizeInfo}<div class="sp" style="flex:1"></div>${mode === "edit" ? `<span class="pill warn" data-dirty-for="${mdKey}" hidden>unsaved</span><button class="ghost" data-discard="${mdKey}" data-dirty-for="${mdKey}" hidden>Discard</button><button id="saveDoc" class="primary" data-doc="${doc.id}">Save edits</button>` : ""}</div>` : ""}
+    ${doc ? `<div class="doc-meta">${versions}<span>${fmtTime(doc.created_at)}</span><span>·</span>${sizeInfo}<div class="sp" style="flex:1"></div>${mode === "edit" ? `<span class="pill warn" data-dirty-for="${mdKey}" hidden>unsaved</span><button class="ghost" data-discard="${mdKey}" data-dirty-for="${mdKey}" hidden>Discard</button><button id="saveDoc" class="primary" data-doc="${doc.id}">Save edits</button>` : ""}</div>` : ""}
     ${body}
   </div>`;
 }
@@ -1065,17 +1110,20 @@ function bindStatic() {
     try { localStorage.setItem("theme", root.dataset.theme); } catch {}
   };
   $("#logoutBtn").onclick = () => run(null, async () => { await api("POST", "/api/logout"); location.href = "/"; });
+  $("#palQ").oninput = () => { pal.q = $("#palQ").value; pal.idx = 0; renderPal(); };
+  $("#palette").onclick = (e) => { if (e.target === $("#palette")) palClose(); };
 }
 function bind() {
   document.querySelectorAll("#main [data-nav]").forEach((b) => b.onclick = () => go(b.dataset.nav));
   document.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { state.filter = b.dataset.filter; state.sel = null; state.app = null; render(true); });
   $("#errClose") && ($("#errClose").onclick = () => { state.err = null; render(true); });
+  $("#noticeAct") && ($("#noticeAct").onclick = () => state.noticeAction?.fn());
   $("#hideChecklist") && ($("#hideChecklist").onclick = () => { state.checklistHidden = true; try { localStorage.setItem("checklistHidden", "1"); } catch {} render(true); });
   $("#dashNew") && ($("#dashNew").onclick = () => go("new"));
   $("#dashRefresh") && ($("#dashRefresh").onclick = () => enqueue("/api/feed/refresh", {}));
   $("#notes") && ($("#notes").oninput = (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; });
   $("#backBtn") && ($("#backBtn").onclick = () => go(isPhone() ? "apps" : "home"));
-  document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; state.editJob = false; state.docMode = "preview"; state.tex = null; state.err = null; render(); });
+  document.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; state.editJob = false; state.docMode = "preview"; state.tex = null; state.viewDoc = null; state.err = null; render(); });
 
   if (state.sel === "settings") {
     document.querySelectorAll("[data-settings-section]").forEach((b) => b.onclick = () => { state.settingsSection = b.dataset.settingsSection; try { localStorage.setItem("settingsSection", state.settingsSection); } catch {} state.err = null; render(true); $("#main").scrollTop = 0; });
@@ -1154,7 +1202,13 @@ function bind() {
     $("#feedScore") && ($("#feedScore").onclick = () => enqueue("/api/feed/score", {}));
     document.querySelectorAll("[data-feed-score1]").forEach((b) => b.onclick = () => enqueue("/api/feed/score", { ids: [Number(b.dataset.feedScore1)] }));
     document.querySelectorAll("[data-feed-track]").forEach((b) => b.onclick = () => enqueue(`/api/feed/${b.dataset.feedTrack}/track`, {}));
-    document.querySelectorAll("[data-feed-dismiss]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedDismiss}/dismiss`); await loadFeed(); }));
+    document.querySelectorAll("[data-feed-dismiss]").forEach((b) => b.onclick = () => {
+      const id = Number(b.dataset.feedDismiss), it = state.feed?.items.find((x) => x.id === id);
+      run(null, async () => {
+        await api("POST", `/api/feed/${id}/dismiss`); await loadFeed();
+        notify(`Removed ${it ? `${it.title_en || it.title} at ${it.company}` : "posting"}`, { label: "Undo", fn: () => run(null, async () => { await api("POST", `/api/feed/${id}/restore`); await loadFeed(); state.notice = null; state.noticeAction = null; }) }, 6000);
+      });
+    });
     document.querySelectorAll("[data-feed-delete]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedDelete}/delete`); await loadFeed(); }));
     document.querySelectorAll("[data-feed-restore]").forEach((b) => b.onclick = () => run(null, async () => { await api("POST", `/api/feed/${b.dataset.feedRestore}/restore`); await loadFeed(); }));
     $("#feedPurge") && ($("#feedPurge").onclick = () => run(null, async () => { await api("DELETE", "/api/feed/dismissed"); await loadFeed(); }));
@@ -1206,8 +1260,19 @@ function bind() {
   }, 250));
 
   $("#cancelNew") && ($("#cancelNew").onclick = () => { clearDrafts("new:"); state.dup = null; state.sel = null; render(true); });
+  document.querySelectorAll("[data-new-mode]").forEach((b) => b.onclick = () => { state.newMode = b.dataset.newMode; state.dup = null; render(true); });
+  document.querySelectorAll("[data-mstatus]").forEach((b) => b.onclick = () => { state.newStatus = b.dataset.mstatus; render(true); });
+  $("#manualBtn") && ($("#manualBtn").onclick = () => {
+    const body = { company: $("#mCompany").value.trim(), role: $("#mRole").value.trim(), location: $("#mLocation").value.trim(), url: $("#mUrl").value.trim(), status: state.newStatus || "applied", applied_at: $("#mApplied").value, notes: $("#mNotes").value.trim(), force: !!state.dup };
+    if (!body.company || !body.role) { state.err = "Company and role are required."; render(true); return; }
+    state.dup = null;
+    run("Adding…", async () => {
+      try { const app = await api("POST", "/api/applications/manual", body); clearDrafts("new:"); await loadList(); await loadGoals(); state.newStatus = null; await open(app.id); }
+      catch (e) { if (e.data?.existing) { state.dup = { existing: e.data.existing, manual: true }; } else throw e; }
+    });
+  });
   $("#dupDismiss") && ($("#dupDismiss").onclick = () => { state.dup = null; render(true); });
-  $("#dupForce") && ($("#dupForce").onclick = () => { const d = state.dup; state.dup = null; enqueue(d.url, { ...d.body, force: true }).then(() => { if (!state.err) { clearDrafts("new:"); render(true); } }); });
+  $("#dupForce") && ($("#dupForce").onclick = () => { const d = state.dup; if (d.manual) { $("#manualBtn").click(); return; } state.dup = null; enqueue(d.url, { ...d.body, force: true }).then(() => { if (!state.err) { clearDrafts("new:"); render(true); } }); });
   $("#captureBtn") && ($("#captureBtn").onclick = () => {
     const body = { url: $("#nUrl").value.trim(), company: $("#nCompany").value.trim(), role: $("#nRole").value.trim(), description: $("#nDesc").value.trim() };
     if (!body.url && !body.description) { state.err = "Paste a job posting URL, or open the section below and paste the description."; render(); return; }
@@ -1221,11 +1286,11 @@ function bind() {
     await loadList();
     if ("status" in body || "applied_at" in body) { await loadGoals(); celebrate(state.app.celebrate); }
   });
-  document.querySelectorAll("[data-status]").forEach((b) => b.onclick = () => patch({ status: b.dataset.status }));
-  $("#applied").onchange = (e) => patch({ applied_at: e.target.value || null });
-  $("#notes").onchange = (e) => patch({ notes: e.target.value });
-  $("#nextAt").onchange = (e) => patch({ next_action_at: e.target.value || null });
-  $("#nextTxt").onchange = (e) => patch({ next_action: e.target.value.trim() || null });
+  document.querySelectorAll("[data-status]").forEach((b) => b.onclick = () => { state.statusOpen = false; patch({ status: b.dataset.status }); });
+  $("#applied") && ($("#applied").onchange = (e) => patch({ applied_at: e.target.value || null }));
+  $("#notes") && ($("#notes").onchange = (e) => patch({ notes: e.target.value }));
+  $("#nextAt") && ($("#nextAt").onchange = (e) => patch({ next_action_at: e.target.value || null }));
+  $("#nextTxt") && ($("#nextTxt").onchange = (e) => patch({ next_action: e.target.value.trim() || null }));
   document.querySelectorAll("[data-log]").forEach((b) => b.onclick = () => run(null, async () => { state.app = await api("POST", `/api/applications/${a.id}/events`, { kind: b.dataset.log }); await loadList(); }));
   $("#noteAdd") && ($("#noteAdd").onclick = () => { const detail = $("#noteTxt").value.trim(); if (!detail) return; run(null, async () => { state.app = await api("POST", `/api/applications/${a.id}/events`, { kind: "note", detail }); }); });
   $("#noteTxt") && ($("#noteTxt").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("#noteAdd").click(); } });
@@ -1254,13 +1319,21 @@ function bind() {
     if (!body.company || !body.role) { state.err = "Company and role are required."; render(); return; }
     run("Saving…", async () => { state.app = await api("PATCH", `/api/applications/${a.id}`, body); clearDrafts(`job:${a.id}:`); state.editJob = false; await loadList(); });
   });
-  $("#delBtn").onclick = async () => { if (confirm(`Delete ${a.company} — ${a.role}? Files on disk are kept.`)) { await api("DELETE", `/api/applications/${a.id}`); for (const k of Object.keys(state.drafts)) if (k.split(":")[1] === String(a.id)) delete state.drafts[k]; persistDrafts(); state.sel = null; state.app = null; await refresh(); } };
+  $("#delBtn").onclick = () => undoable({
+    text: `Deleted ${a.company} · ${a.role} (files on disk are kept)`,
+    apply: () => { state.pendingDeletes.add(a.id); state.sel = null; state.app = null; dropPdf(); render(true); },
+    commit: async () => { await api("DELETE", `/api/applications/${a.id}`); state.pendingDeletes.delete(a.id); for (const k of Object.keys(state.drafts)) if (k.split(":")[1] === String(a.id)) delete state.drafts[k]; persistDrafts(); await loadList(); await loadGoals(); render(true); },
+    revert: () => { state.pendingDeletes.delete(a.id); open(a.id); },
+  });
 
   const genNote = () => ($("#genNote")?.value ?? state.genNote[`${a.id}:${state.tab}`] ?? "").trim();
   document.querySelectorAll("[data-gen]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/generate`, { what: b.dataset.gen, instructions: genNote() }));
   $("#genNote") && ($("#genNote").oninput = (e) => { state.genNote[`${a.id}:${state.tab}`] = e.target.value; });
   $("#genNote") && ($("#genNote").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $(".doc-group.gen [data-gen]")?.click(); } });
   document.querySelectorAll("[data-diff]").forEach((b) => b.onclick = () => { state.diffAgainst = b.dataset.diff; render(); });
+  document.querySelectorAll("[data-view-doc]").forEach((b) => b.onclick = () => { state.viewDoc = Number(b.dataset.viewDoc); state.docMode = "preview"; state.tex = null; render(true); });
+  $("#docLatest") && ($("#docLatest").onclick = () => { state.viewDoc = null; render(true); });
+  $("#docRestore") && ($("#docRestore").onclick = () => run("Restoring…", async () => { const r = await api("POST", `/api/documents/${$("#docRestore").dataset.doc}/restore`, {}); state.viewDoc = null; state.docMode = "preview"; state.app = r; state.ats = null; if (r.pdfError) state.err = `Restored, but the PDF failed to build: ${r.pdfError}`; else notify("✓ Restored as the newest version"); }));
   document.querySelectorAll("[data-docmode]").forEach((b) => b.onclick = () => {
     state.docMode = b.dataset.docmode; render();
     if (state.docMode === "diff" && state.baseResume == null) api("GET", `/api/profile/resume?key=${encodeURIComponent(a.resume_key || "default")}`).then((r) => { state.baseResume = r.markdown; if (state.docMode === "diff") render(); }).catch(() => { state.baseResume = ""; });
@@ -1280,7 +1353,7 @@ function bind() {
   document.querySelectorAll("[data-condense]").forEach((b) => b.onclick = () => enqueue(`/api/documents/${b.dataset.condense}/condense`, {}));
   document.querySelectorAll("[data-emphasize]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/generate`, { what: "resume", emphasize: JSON.parse(b.dataset.emphasize), instructions: genNote() }));
   $("[data-ats-base]") && ($("[data-ats-base]").onclick = () => { state.ats = null; loadAts(a, null).then(() => render(true)); });
-  $("#atsBox") && ($("#atsBox").ontoggle = () => { state.atsOpen = $("#atsBox").open; });
+  $("#atsBox") && ($("#atsBox").ontoggle = () => { state.atsOpen = $("#atsBox").open; try { localStorage.setItem("atsOpen", state.atsOpen ? "1" : "0"); } catch {} });
   document.querySelectorAll("[data-learn]").forEach((b) => b.onclick = () => enqueue(`/api/documents/${b.dataset.learn}/learn`, {}));
   $("#saveDoc") && ($("#saveDoc").onclick = () => { const id = $("#saveDoc").dataset.doc, content = $("#docText").value; run(a.latex ? "Saving and rebuilding PDF…" : "Saving…", async () => { const r = await api("PUT", `/api/documents/${id}`, { content }); clearDrafts(`doc:${a.id}:${state.tab}:${id}`); state.app = await api("GET", `/api/applications/${a.id}`); state.docMode = "preview"; state.tex = null; if (r.pdfError) state.err = `Saved, but the PDF failed to build: ${r.pdfError}`; }); });
 
@@ -1291,10 +1364,20 @@ function bind() {
   });
   document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => copyText($(`[data-q="${b.dataset.copy}"] .ans`).value).then((ok) => { b.textContent = ok ? "Copied" : "Blocked"; setTimeout(() => (b.textContent = "Copy"), 1200); }));
   document.querySelectorAll("[data-saveq]").forEach((b) => b.onclick = () => { const answer = $(`[data-q="${b.dataset.saveq}"] .ans`).value; run("Saving…", async () => { await api("PUT", `/api/questions/${b.dataset.saveq}`, { answer }); clearDrafts(`q:${a.id}:${b.dataset.saveq}`); state.app = await api("GET", `/api/applications/${a.id}`); }); });
-  document.querySelectorAll("[data-delq]").forEach((b) => b.onclick = () => run(null, async () => { await api("DELETE", `/api/questions/${b.dataset.delq}`); clearDrafts(`q:${a.id}:${b.dataset.delq}`); state.app = await api("GET", `/api/applications/${a.id}`); }));
+  document.querySelectorAll("[data-delq]").forEach((b) => b.onclick = () => {
+    const qid = Number(b.dataset.delq), q = a.questions.find((x) => x.id === qid);
+    undoable({
+      text: `Removed “${q.question.slice(0, 60)}${q.question.length > 60 ? "…" : ""}”`,
+      apply: () => { a.questions = a.questions.filter((x) => x.id !== qid); render(true); },
+      commit: async () => { await api("DELETE", `/api/questions/${qid}`); clearDrafts(`q:${a.id}:${qid}`); if (state.app?.id === a.id) state.app = await api("GET", `/api/applications/${a.id}`); render(true); },
+      revert: async () => { if (state.app?.id === a.id) { state.app = await api("GET", `/api/applications/${a.id}`); render(true); } },
+    });
+  });
 
   // Apply panel
   $("#applyBtn") && ($("#applyBtn").onclick = () => { state.applyOpen = !state.applyOpen; render(true); });
+  $("#statusOpen") && ($("#statusOpen").onclick = () => { state.statusOpen = true; render(true); });
+  $("#headOpen") && ($("#headOpen").onclick = () => { state.headOpen = true; render(true); });
   $("#applyClose") && ($("#applyClose").onclick = () => { state.applyOpen = false; render(true); });
   for (const id of ["#applyCopyAns", "#copyAllAns"]) $(id) && ($(id).onclick = () => copyText(answersText(a)).then((ok) => { if (!ok) return notify("✗ The browser blocked the clipboard — use the Copy buttons on the Questions tab"); $(id).textContent = `Copied ${a.questions.length} ✓`; setTimeout(() => { const b = $(id); if (b) b.textContent = "⎘ Copy all answers"; }, 1500); }));
   document.querySelectorAll("[data-copy-text]").forEach((b) => b.onclick = () => { const doc = a.documents.find((d) => d.id === Number(b.dataset.copyText)); copyText(mdToText(doc.content)).then((ok) => { b.textContent = ok ? "Copied ✓" : "Blocked"; setTimeout(() => (b.textContent = "⎘ Copy text"), 1500); }); });
@@ -1324,8 +1407,40 @@ async function loadModels(provider, quiet) {
   } finally { loading.delete(provider); }
 }
 
+// ---------- ⌘K palette: applications, views, actions ----------
+const pal = { open: false, q: "", idx: 0, items: [] };
+function palItems(q) {
+  const t = q.trim().toLowerCase();
+  const hit = (s) => !t || s.toLowerCase().includes(t);
+  const apps = state.apps.filter((a) => !state.pendingDeletes.has(a.id) && hit(`${a.company} ${a.role} ${a.location || ""} ${a.status}`))
+    .slice(0, t ? 8 : 5).map((a) => ({ ic: "📄", text: `${a.company} · ${a.role}`, sub: `${a.status}${a.location ? ` · ${a.location}` : ""}`, run: () => open(a.id) }));
+  const views = [
+    ["🏠", "Home", () => go("home")], ["📡", "Feed", () => go("feed")], ["🎯", "Goals", () => go("goals")], ["⏱", "Tasks", () => go("tasks")],
+    ["＋", "New application — capture a posting", () => { state.newMode = "capture"; go("new"); }], ["✍", "New application — log by hand", () => { state.newMode = "manual"; go("new"); }],
+    ["↻", "Refresh the job feed", () => enqueue("/api/feed/refresh", {})], ["◐", "Toggle dark mode", () => $("#themeBtn").click()], ["?", "Keyboard shortcuts", () => { $("#helpOverlay").hidden = false; }],
+    ...SETTINGS_SECTIONS.map(([k, ic, n]) => [ic, `Settings → ${n}`, () => go(`settings:${k}`)]),
+  ].filter(([, n]) => hit(n)).map(([ic, text, run]) => ({ ic, text, run }));
+  return [...apps, ...views].slice(0, 12);
+}
+function renderPal() {
+  pal.items = palItems(pal.q); pal.idx = Math.min(pal.idx, Math.max(0, pal.items.length - 1));
+  $("#palList").innerHTML = pal.items.map((it, i) => `<div class="pal-row ${i === pal.idx ? "on" : ""}" data-pal="${i}"><span class="ic">${it.ic}</span><span class="sp">${esc(it.text)}${it.sub ? ` <small>${esc(it.sub)}</small>` : ""}</span></div>`).join("") || '<div class="pal-row muted">Nothing matches.</div>';
+  document.querySelectorAll("[data-pal]").forEach((r) => { r.onmouseenter = () => { pal.idx = Number(r.dataset.pal); renderPal(); }; r.onclick = () => palRun(); });
+}
+function palRun() { const it = pal.items[pal.idx]; if (!it) return; palClose(); it.run(); }
+function palOpen() { pal.open = true; pal.q = ""; pal.idx = 0; $("#palette").hidden = false; $("#palQ").value = ""; renderPal(); $("#palQ").focus(); }
+function palClose() { pal.open = false; $("#palette").hidden = true; }
+
 // Keyboard: ⌘S saves the open editor; single keys navigate when not typing.
 document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); pal.open ? palClose() : palOpen(); return; }
+  if (pal.open) {
+    if (e.key === "Escape") { palClose(); e.preventDefault(); }
+    else if (e.key === "ArrowDown") { pal.idx = Math.min(pal.items.length - 1, pal.idx + 1); renderPal(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { pal.idx = Math.max(0, pal.idx - 1); renderPal(); e.preventDefault(); }
+    else if (e.key === "Enter") { palRun(); e.preventDefault(); }
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     const btn = $("#saveDoc") || $("#texSave") || $("#eSave");
     if (btn) { e.preventDefault(); btn.click(); }
@@ -1342,6 +1457,24 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "?") { $("#helpOverlay").hidden = !$("#helpOverlay").hidden; e.preventDefault(); }
   else if (e.key === "/") { $("#search").focus(); $("#search").select(); e.preventDefault(); }
   else if (e.key === "n") { go("new"); e.preventDefault(); }
+  else if (state.sel === "feed" && ["j", "k", "t", "x", "o", "s"].includes(e.key)) {
+    // Triage the feed without the mouse: j/k move, t track, x remove, o open the posting, s score.
+    const rows = [...document.querySelectorAll(".feed-item")];
+    if (!rows.length) return;
+    if (e.key === "j" || e.key === "k") {
+      state.feedCursor = Math.max(0, Math.min(rows.length - 1, state.feedCursor + (e.key === "j" ? 1 : -1)));
+      rows.forEach((r, i) => r.classList.toggle("cur", i === state.feedCursor));
+      rows[state.feedCursor].scrollIntoView({ block: "nearest" });
+      return;
+    }
+    const row = rows[state.feedCursor]; if (!row) return;
+    const id = row.dataset.feedId;
+    if (e.key === "t") $(`[data-feed-track="${id}"]`, row)?.click() ?? $(`[data-open-app]`, row)?.click();
+    else if (e.key === "x") $(`[data-feed-dismiss="${id}"]`, row)?.click();
+    else if (e.key === "o") { const l = row.querySelector('a[href^="http"]'); if (l) window.open(l.href, "_blank", "noopener"); }
+    else if (e.key === "s") $(`[data-feed-score1="${id}"]`, row)?.click();
+    e.preventDefault();
+  }
   else if (e.key === "j" || e.key === "k") {
     const ids = [...document.querySelectorAll(".row")].map((r) => Number(r.dataset.id));
     if (!ids.length) return;
@@ -1350,7 +1483,7 @@ document.addEventListener("keydown", (e) => {
   }
   else if (/^[1-6]$/.test(e.key) && state.app) {
     const t = ["job", "resume", "cover_letter", "questions", "prep", "timeline"][Number(e.key) - 1];
-    state.tab = t; state.editJob = false; state.docMode = "preview"; state.tex = null; render(true);
+    state.tab = t; state.editJob = false; state.docMode = "preview"; state.tex = null; state.viewDoc = null; render(true);
   }
 });
 

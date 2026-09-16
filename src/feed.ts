@@ -347,6 +347,16 @@ const COUNTRY_ALIASES: Record<string, string[]> = {
   "austria": ["österreich", "osterreich"], "belgium": ["belgië", "belgie", "belgique"], "czech republic": ["czechia"],
   "united arab emirates": ["uae", "dubai", "abu dhabi"], "hong kong": ["hk"], "singapore": ["sg"],
 };
+// Boards often give just the city; a country on the list should still match it.
+const CITY_COUNTRY: Record<string, string[]> = {
+  "germany": ["berlin", "munich", "münchen", "hamburg", "frankfurt", "cologne", "köln", "stuttgart", "düsseldorf", "leipzig", "dresden", "hannover", "nuremberg", "nürnberg", "bremen", "karlsruhe", "heidelberg"],
+  "denmark": ["copenhagen", "københavn", "aarhus", "odense", "aalborg"], "sweden": ["stockholm", "gothenburg", "göteborg", "malmö", "malmo"], "norway": ["oslo", "bergen"], "finland": ["helsinki", "espoo"],
+  "netherlands": ["amsterdam", "rotterdam", "utrecht", "eindhoven", "the hague", "den haag"], "belgium": ["brussels", "antwerp", "ghent"], "switzerland": ["zurich", "zürich", "geneva", "basel", "bern", "lausanne"], "austria": ["vienna", "wien", "graz"],
+  "france": ["paris", "lyon", "toulouse", "nantes"], "spain": ["madrid", "barcelona", "valencia"], "italy": ["milan", "milano", "rome", "roma", "turin"], "portugal": ["lisbon", "lisboa", "porto"], "ireland": ["dublin", "cork"],
+  "united kingdom": ["london", "manchester", "edinburgh", "cambridge", "oxford", "bristol", "birmingham", "glasgow"], "poland": ["warsaw", "kraków", "krakow", "wrocław", "wroclaw", "gdańsk", "gdansk"], "czech republic": ["prague", "praha", "brno"],
+  "singapore": ["singapore"], "japan": ["tokyo", "osaka"], "australia": ["sydney", "melbourne", "brisbane"], "canada": ["toronto", "vancouver", "montreal", "ottawa"], "india": ["bengaluru", "bangalore", "mumbai", "delhi", "gurgaon", "gurugram", "hyderabad", "pune", "chennai", "noida"],
+  "united arab emirates": ["dubai", "abu dhabi"], "united states": ["new york", "san francisco", "seattle", "austin", "boston", "chicago", "los angeles", "denver", "atlanta", "washington dc", "palo alto", "mountain view", "san jose", "sunnyvale", "redmond"],
+};
 const US_STATES = new Set("AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC".split(" "));
 const OTHER_COUNTRY = /\b(india|canada|australia|germany|deutschland|uk|united kingdom|mexico|brazil|china|japan|france|spain|italy|netherlands|ireland|singapore|philippines|nigeria|south africa|argentina|colombia|chile|peru|pakistan|bangladesh|malaysia|indonesia|vietnam|new zealand|europe|emea|apac|latam)\b/i;
 // State codes that are also common country codes ("Berlin, DE", "Bengaluru, IN", "Toronto, CA") only count with a US hint or an unfamiliar city.
@@ -366,6 +376,7 @@ export function locationHas(location: string, term: string): boolean {
   if (!t) return false;
   if (hasPhrase(l, t)) return true;
   if (COUNTRY_ALIASES[t]?.some((a) => hasPhrase(l, words(a).trim()))) return true;
+  if (CITY_COUNTRY[t]?.some((c) => hasPhrase(l, words(c).trim()))) return true;
   if (t === "united states" && looksAmerican(location)) return true;
   for (const [country, aliases] of Object.entries(COUNTRY_ALIASES)) // the user typed the alias ("USA"), the posting the country
     if (aliases.includes(t) && (l.includes(country) || (country === "united states" && looksAmerican(location)))) return true;
