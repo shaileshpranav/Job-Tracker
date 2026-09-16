@@ -13,21 +13,22 @@ try { state.settingsSection = localStorage.getItem("settingsSection") || "model"
 // application's drafts can be dropped together.
 try { state.drafts = JSON.parse(localStorage.getItem("drafts") || "{}") || {}; } catch {}
 const persistDrafts = () => { try { localStorage.setItem("drafts", JSON.stringify(state.drafts)); } catch {} };
-function clearDrafts(prefix) {
-  for (const k of Object.keys(state.drafts)) if (k.startsWith(prefix)) delete state.drafts[k];
+// A selector ending in ":" is a prefix ("job:7:" = every job field); anything else is one exact key,
+// so "q:7:12" never matches "q:7:123".
+const draftMatch = (key, sel) => sel.endsWith(":") ? key.startsWith(sel) : key === sel;
+function clearDrafts(sel) {
+  for (const k of Object.keys(state.drafts)) if (draftMatch(k, sel)) delete state.drafts[k];
   persistDrafts();
 }
-const hasDraft = (prefix) => Object.keys(state.drafts).some((k) => k.startsWith(prefix));
-const draftKeys = (prefix) => Object.keys(state.drafts).filter((k) => k.startsWith(prefix));
-// Drop drafts that can no longer be reached: older document versions, deleted questions.
+const hasDraft = (sel) => Object.keys(state.drafts).some((k) => draftMatch(k, sel));
+const draftKeys = (sel) => Object.keys(state.drafts).filter((k) => draftMatch(k, sel));
+// Drop drafts for questions that no longer exist. Drafts on superseded document versions are
+// kept on purpose — renderDoc offers to restore or discard them.
 function pruneDrafts(a) {
-  const latest = {}; for (const d of a.documents) latest[d.kind] ??= String(d.id);
   const qIds = new Set(a.questions.map((q) => String(q.id)));
   for (const k of Object.keys(state.drafts)) {
-    const [what, appId, x, y] = k.split(":");
-    if (appId !== String(a.id)) continue;
-    if ((what === "doc" || what === "tex") && latest[x] !== y) delete state.drafts[k];
-    if (what === "q" && !qIds.has(x)) delete state.drafts[k];
+    const [what, appId, x] = k.split(":");
+    if (appId === String(a.id) && what === "q" && !qIds.has(x)) delete state.drafts[k];
   }
   persistDrafts();
 }
@@ -448,6 +449,7 @@ async function open(id) {
   let app;
   try { app = await api("GET", `/api/applications/${id}`); }
   catch (e) { notify(`✗ That application no longer exists (${e.message}).`); await loadList(); if (state.sel === "feed") await loadFeed(); render(true); return; }
+  if (state.app?.id !== id) dropPdf();
   state.sel = id; state.editJob = false; state.docMode = "preview"; state.tex = null; state.app = app; state.err = null; state.applyOpen = false;
   pruneDrafts(app);
   render(true);
@@ -601,7 +603,7 @@ function renderSettings() {
       <div class="toolbar" style="margin-top:10px"><input id="baseNew" placeholder="new base name, e.g. platform" style="width:220px"><span class="muted">copy of</span><div class="seg">${(state.profile?.resumes || []).filter((r) => r.hasMarkdown).map((r, i) => `<button data-base-from="${esc(r.key)}" class="${i === 0 ? "on" : ""}">${esc(r.label)}</button>`).join("")}</div><button id="baseCreate">Create</button></div>
     </div>`,
     documents: () => `<div class="card"><h2>PDF file names</h2>
-      <p class="muted">What the recruiter sees in the upload. <code>{name}</code> comes from the heading of the base resume the application uses${s.candidate ? ` (currently <b>${esc(s.candidate)}</b>)` : " — none found yet"}; <code>{kind}</code> is <code>Resume</code> or <code>Cover-Letter</code>; <code>{company}</code> is the employer. Spaces become hyphens.</p>
+      <p class="muted">What the recruiter sees in the upload. <code>{name}</code> comes from the heading of the base resume the application uses${s.candidate ? ` (currently <b>${esc(s.candidate)}</b>)` : " — none found yet"}; <code>{kind}</code> is <code>Resume</code> or <code>Cover-Letter</code> (added automatically if the pattern leaves it out, so the two files never collide); <code>{company}</code> is the employer. Spaces become hyphens.</p>
       <div class="toolbar" style="margin:0"><input id="sPdfName" value="${esc(s.pdfName || "")}" placeholder="${esc(s.pdfNameDefault)}" style="width:260px"><button id="sPdfNameSave" class="primary">Save</button><span class="muted">→ e.g. <code>${esc(s.pdfNameExample)}</code></span></div>
     </div>
     ${state.settings.latex !== false ? `<div class="card"><h2>PDF templates (LaTeX)</h2>
@@ -794,7 +796,7 @@ function renderDetail(a) {
 function renderApply(a) {
   const latest = (k) => a.documents.find((d) => d.kind === k);
   const count = (k) => a.documents.filter((d) => d.kind === k).length;
-  const days = state.goals?.goals?.followupDays || 7;
+  const days = state.goals?.goals?.followupDays ?? 7; // 0 = nudges off → no follow-up prefilled
   const docRow = (kind, label) => {
     const doc = latest(kind);
     if (!doc) return `<div class="apply-row"><span class="ic bad">✗</span><div class="sp"><b>${label}</b> <span class="muted">not generated yet</span></div><button data-gen="${kind}">✨ Generate</button></div>`;
@@ -812,7 +814,7 @@ function renderApply(a) {
     <div class="apply-row"><span class="ic">📂</span><div class="sp"><b>Files</b> <span class="muted">applications/${esc(a.folder)}/ — drag the PDFs from Finder into the upload fields</span></div><button id="applyReveal" title="Rebuilds the PDFs if needed and opens the folder in Finder">Show in Finder</button></div>
     ${a.status === "saved" ? `<div class="apply-done">
       <label>Applied on <input type="date" id="applyDate" value="${localDate()}"></label>
-      <label>Follow up on <input type="date" id="applyNextAt" value="${localDate(days)}"><input id="applyNextTxt" value="Follow up if no reply" placeholder="next action"></label>
+      <label>Follow up on <input type="date" id="applyNextAt" value="${days ? localDate(days) : ""}"><input id="applyNextTxt" value="${days ? "Follow up if no reply" : ""}" placeholder="next action"></label>
       <button class="primary" id="applyMark">✓ Mark as applied</button>
     </div>` : ""}
   </div>`;
@@ -881,6 +883,10 @@ function renderDoc(a, kind) {
   const mdKey = doc ? `doc:${a.id}:${kind}:${doc.id}` : "", texKey = doc ? `tex:${a.id}:${kind}:${doc.id}` : "";
   const parked = doc && mode !== "edit" && hasDraft(mdKey) ? `<div class="banner draft"><span>✎ You have unsaved edits to this ${label}.</span><button data-docmode="edit">Continue editing</button><button class="ghost" data-discard="${mdKey}">Discard</button></div>` : "";
   const parkedTex = doc && mode !== "tex" && hasDraft(texKey) ? `<div class="banner draft"><span>✎ You have unsaved LaTeX edits to this ${label}.</span><button data-docmode="tex">Continue editing</button><button class="ghost" data-discard="${texKey}">Discard</button></div>` : "";
+  // Edits made to an earlier version (typed while a regenerate was running) are kept, not dropped.
+  const older = (what, cur) => draftKeys(`${what}:${a.id}:${kind}:`).filter((k) => k !== cur).map((k) => { const id = Number(k.split(":")[3]), v = docs.findIndex((d) => d.id === id); return { k, v: v >= 0 ? docs.length - v : null }; });
+  const stale = [...older("doc", mdKey).map((o) => ({ ...o, what: "Markdown", into: mdKey })), ...older("tex", texKey).map((o) => ({ ...o, what: "LaTeX", into: texKey }))];
+  const staleBox = doc ? stale.map((o) => `<div class="banner draft"><span>✎ Unsaved ${o.what} edits to ${o.v ? `v${o.v}` : "an earlier version"} of this ${label} were kept.</span><button data-restore="${o.k}" data-restore-into="${o.into}" title="Put that text into the editor for the current version (v${docs.length}) — it replaces the current text until you save">Restore into editor</button><button class="ghost" data-discard="${o.k}">Discard</button></div>`).join("") : "";
   let body = "";
   if (doc) {
     if (mode === "edit") body = `${doc.custom_tex ? `<div class="banner">This version has hand-edited LaTeX. Saving Markdown edits regenerates the LaTeX from the Markdown (your TeX tweaks will be dropped).</div>` : ""}<textarea class="doc" id="docText" data-draft="${mdKey}">${esc(doc.content)}</textarea>`;
@@ -928,7 +934,7 @@ function renderDoc(a, kind) {
       </div></div>
       </div>` : ""}
     </div>
-    ${parked}${parkedTex}
+    ${parked}${parkedTex}${staleBox}
     ${ats}
     ${doc ? `<div class="doc-meta"><span class="v">v${docs.length}</span><span>${fmtTime(doc.created_at)}</span><span>·</span>${sizeInfo}<div class="sp" style="flex:1"></div>${mode === "edit" ? `<span class="pill warn" data-dirty-for="${mdKey}" hidden>unsaved</span><button class="ghost" data-discard="${mdKey}" data-dirty-for="${mdKey}" hidden>Discard</button><button id="saveDoc" class="primary" data-doc="${doc.id}">Save edits</button>` : ""}</div>` : ""}
     ${body}
@@ -959,6 +965,7 @@ function renderAts(a, doc) {
       </div>` : ""}
   </details>`;
 }
+const dropPdf = () => { if (state.pdf?.url) URL.revokeObjectURL(state.pdf.url); state.pdf = null; };
 async function loadPdf(a, doc, key) {
   if (loadPdf.inflight === key) return;
   loadPdf.inflight = key;
@@ -966,10 +973,11 @@ async function loadPdf(a, doc, key) {
     const res = await fetch(`/doc/${doc.id}.pdf`, { cache: "no-store" });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
     const blob = await res.blob();
-    if (state.pdf?.url) URL.revokeObjectURL(state.pdf.url);
+    if (state.app?.id !== a.id) return; // navigated away while compiling — nothing to show, nothing to keep
+    dropPdf();
     state.pdf = { key, url: URL.createObjectURL(blob) };
     if (!doc.pdf_current && state.app?.id === a.id) state.app = await api("GET", `/api/applications/${a.id}`); // page count is known now
-  } catch (e) { state.pdf = { key, error: e.message }; }
+  } catch (e) { dropPdf(); state.pdf = { key, error: e.message }; }
   finally { loadPdf.inflight = null; }
   if (state.app?.id === a.id && state.docMode === "pdf") render(true);
 }
@@ -1017,7 +1025,7 @@ const errBox = () => state.err ? `<div class="errbar"><span>✗ ${esc(state.err)
 
 // Switch main view. Views that load data do so lazily and re-render when it lands.
 function go(view) {
-  state.app = null; state.err = null; state.dup = null;
+  state.app = null; state.err = null; state.dup = null; dropPdf();
   if (view.startsWith("settings:")) { state.settingsSection = view.slice(9); view = "settings"; }
   if (view === "apps") { state.sel = null; render(true); return; }
   if (view === "home") { state.sel = isPhone() ? "home" : null; state.activity = null; api("GET", "/api/activity").then((a) => { state.activity = a; render(); }).catch(() => { state.activity = []; render(); }); }
@@ -1154,7 +1162,7 @@ function bind() {
     document.querySelectorAll("[data-add-board]").forEach((b) => b.onclick = () => { const ta = $("#fBoards"); if (!ta.value.split("\n").includes(b.dataset.addBoard)) ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + b.dataset.addBoard; state.feedTest = null; $("#fSave").click(); });
     document.querySelectorAll("[data-matchin]").forEach((b) => b.onclick = () => { document.querySelectorAll("[data-matchin]").forEach((x) => x.classList.remove("on")); b.classList.add("on"); });
     document.querySelectorAll("[data-agg]").forEach((c) => c.onchange = () => { if (c.dataset.agg === "adzuna") { state.feed.settings.aggregators.adzuna = c.checked; render(true); } });
-    document.querySelectorAll("[data-bulk]").forEach((b) => b.onclick = () => run("Working…", async () => { const r = await api("POST", "/api/feed/bulk", { action: b.dataset.bulk }); notify(`${b.dataset.bulk === "track_hot" ? `Queued ${r.n} capture${r.n === 1 ? "" : "s"}` : `Dismissed ${r.n}`}`); await loadFeed(); await refreshJobs(); }));
+    document.querySelectorAll("[data-bulk]").forEach((b) => b.onclick = () => run("Working…", async () => { const r = await api("POST", "/api/feed/bulk", { action: b.dataset.bulk }); notify(`${b.dataset.bulk === "track_hot" ? `Queued ${r.n} capture${r.n === 1 ? "" : "s"}${r.linked ? `, linked ${r.linked} already tracked` : ""}` : `Dismissed ${r.n}`}`); await loadFeed(); await refreshJobs(); }));
     $("#fSave") && ($("#fSave").onclick = () => {
       const body = { keywords: $("#fKeywords").value, matchIn: $("[data-matchin].on")?.dataset.matchin || "title", locations: $("#fLocations").value, exclude: $("#fExclude").value, boards: $("#fBoards").value,
         aggregators: Object.fromEntries([...document.querySelectorAll("[data-agg]")].map((c) => [c.dataset.agg, c.checked])),
@@ -1219,6 +1227,13 @@ function bind() {
   $("#prepBtn") && ($("#prepBtn").onclick = () => enqueue(`/api/applications/${a.id}/prep`, {}));
   document.querySelectorAll("[data-edit-job]").forEach((b) => b.onclick = () => { state.editJob = true; render(); });
   document.querySelectorAll("[data-discard]").forEach((b) => b.onclick = () => { clearDrafts(b.dataset.discard); render(true); });
+  document.querySelectorAll("[data-restore]").forEach((b) => b.onclick = () => {
+    const from = b.dataset.restore, into = b.dataset.restoreInto;
+    state.drafts[into] = state.drafts[from]; delete state.drafts[from]; persistDrafts();
+    state.docMode = into.startsWith("tex:") ? "tex" : "edit";
+    render(true);
+    if (state.docMode === "tex") $(`[data-docmode="tex"]`)?.click(); // loads the TeX; the draft is applied on top
+  });
   document.querySelectorAll("[data-fit]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/fit`, {}));
   document.querySelectorAll("[data-base]").forEach((b) => b.onclick = () => run("Switching base resume…", async () => { state.app = await api("PATCH", `/api/applications/${a.id}`, { resume_key: b.dataset.base }); state.ats = null; await loadList(); }));
   document.querySelectorAll("[data-reextract]").forEach((b) => b.onclick = () => enqueue(`/api/applications/${a.id}/reextract`, { source: b.dataset.reextract }));
@@ -1266,8 +1281,7 @@ function bind() {
   $("#answerBtn") && ($("#answerBtn").onclick = () => {
     const questions = $("#qIn").value.split("\n").map((s) => s.replace(/^\s*\d+[.)]\s*/, "").trim()).filter(Boolean);
     if (!questions.length) { state.err = "Paste at least one question."; render(); return; }
-    clearDrafts(`qin:${a.id}:`);
-    enqueue(`/api/applications/${a.id}/questions`, { questions });
+    enqueue(`/api/applications/${a.id}/questions`, { questions }).then(() => { if (!state.err) { clearDrafts(`qin:${a.id}:`); render(true); } });
   });
   document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => copyText($(`[data-q="${b.dataset.copy}"] .ans`).value).then((ok) => { b.textContent = ok ? "Copied" : "Blocked"; setTimeout(() => (b.textContent = "Copy"), 1200); }));
   document.querySelectorAll("[data-saveq]").forEach((b) => b.onclick = () => { const answer = $(`[data-q="${b.dataset.saveq}"] .ans`).value; run("Saving…", async () => { await api("PUT", `/api/questions/${b.dataset.saveq}`, { answer }); clearDrafts(`q:${a.id}:${b.dataset.saveq}`); state.app = await api("GET", `/api/applications/${a.id}`); }); });
