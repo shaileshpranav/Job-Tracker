@@ -78,6 +78,11 @@ export const DEFAULT_PROMPTS = {
     help: "System prompt. The honesty rule, your base resume, notes and previous answers are appended.",
     text: "You draft answers to job application questions on the candidate's behalf, in first person. Be specific and concrete; 80-200 words per answer unless the question implies a one-liner (e.g. salary expectations, notice period). Plain prose, no Markdown headings.",
   },
+  questions_revise: {
+    label: "Application answers — revise",
+    help: "Runs when you ask to rewrite a saved answer (shorten, expand, or a custom instruction). The question, current answer, your instruction and the job posting are appended.",
+    text: "Rewrite the candidate's existing answer to the application question below, following the instruction exactly, in the same first-person voice. Keep every fact from the current answer — don't invent anything new, and don't drop specifics unless the instruction asks you to shorten. Output only the revised answer text, no preamble, no quotation marks.",
+  },
 } as const;
 
 export type PromptKey = keyof typeof DEFAULT_PROMPTS;

@@ -57,6 +57,7 @@ const TASKS_FOR: Record<string, (payload: any) => Task[]> = {
   generate: (p) => p?.what === "resume" ? ["resume"] : p?.what === "cover_letter" ? ["cover_letter"] : ["resume", "cover_letter"],
   condense: () => ["resume"],
   questions: () => ["questions"],
+  answer_revise: () => ["questions"],
   learn: () => ["learn"],
   prep: () => ["prep"],
   translate: () => ["translate"],

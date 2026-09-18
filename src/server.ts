@@ -205,7 +205,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   // profile
-  if (m("GET", /^\/api\/profile$/)) return send(res, 200, profileStatus());
+  if (m("GET", /^\/api\/profile$/)) {
+    const status = profileStatus();
+    return send(res, 200, { ...status, resumes: status.resumes.map((r) => ({ ...r, candidate: r.hasMarkdown ? candidateName(r.key) : "" })) });
+  }
   if (m("POST", /^\/api\/profile\/import$/)) { const { key = DEFAULT_KEY } = await readJson(req); return send(res, 202, { job: await queueJob("import", `Import resume${key === DEFAULT_KEY ? "" : ` (${key})`}`, { key }) }); }
   if (m("GET", /^\/api\/profile\/resume$/)) {
     const key = url.searchParams.get("key") || DEFAULT_KEY;
@@ -683,6 +686,15 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     db.prepare("UPDATE questions SET answer = ? WHERE id = ?").run(answer, q.id);
     writeQuestionsFile(getApp(q.application_id)!);
     return send(res, 200, { ok: true });
+  }
+  // Rewrite a saved answer per a free-text instruction (shorten / expand / anything typed).
+  if ((r = m("POST", /^\/api\/questions\/(\d+)\/revise$/))) {
+    const { instruction } = await readJson(req);
+    const q = db.prepare("SELECT * FROM questions WHERE id = ?").get(Number(r[1])) as any;
+    if (!q) throw new HttpError(404, "Question not found");
+    const instr = String(instruction ?? "").trim();
+    if (!instr) throw new HttpError(400, "Describe how to revise it");
+    return send(res, 202, { job: await queueJob("answer_revise", `Revise answer (${instr.slice(0, 30)}${instr.length > 30 ? "…" : ""})`, { question_id: q.id, instruction: instr }, q.application_id) });
   }
   if ((r = m("DELETE", /^\/api\/questions\/(\d+)$/))) {
     const q = db.prepare("SELECT * FROM questions WHERE id = ?").get(Number(r[1])) as any;
