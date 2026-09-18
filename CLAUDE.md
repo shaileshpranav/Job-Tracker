@@ -15,6 +15,10 @@ There is no build step, no bundler, and no test suite — Node 22.6+ runs `src/s
 native TypeScript type-stripping, and `src/db.ts` uses Node's built-in `node:sqlite`. The frontend
 (`src/public/app.js`, `index.html`) is plain JS/HTML served as-is, no compile step there either.
 
+`docker compose up` also works (see `Dockerfile`/`docker-compose.yml`) and runs the exact same
+`node --env-file-if-exists=.env src/server.ts`, so it's a fine way to exercise a change too — the
+image has no LaTeX, so PDF export there always uses the browser-print fallback.
+
 To exercise a change, actually run `npm run dev` and hit the routes/UI — there's nothing else to
 verify correctness.
 
