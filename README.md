@@ -7,7 +7,7 @@ Local job-application tracker with Claude doing the repetitive work:
 
 - **Capture** — paste a posting URL; company, role, location, salary, requirements and any application questions are extracted and logged.
 - **Tailor** — a resume variant and cover letter are written from your base resume for that specific posting (no invented facts), saved with the application, and printable to PDF.
-- **Answer** — paste the form's questions; answers are drafted from your profile and reuse what you've said on earlier applications.
+- **Answer** — paste the form's questions; answers are drafted from your profile and reuse what you've said on earlier applications. Rewrite any saved answer afterward with **Shorten**, **Expand**, or a typed instruction ("more specific", "less formal").
 - **Track** — status pipeline, applied date, notes, timeline. Everything is also mirrored as Markdown under `applications/`.
 
 ## Setup
@@ -141,7 +141,7 @@ Every model-backed action — capture, re-extract, fit score, resume/cover lette
 
 ## Base resumes
 
-`profile/resume.md` is the default base. Add more as `profile/resume-<name>.md` (or drop `resume-<name>.pdf` and import it from **Settings → Base resumes**; you can also create one there as a copy of another and edit it in place). A first-line `<!-- label: Platform / backend -->` names it. With more than one base, **fit scoring runs against each** and the application uses the best-scoring one for tailoring, cover letters, answers and prep; the fit card shows every base's score and lets you pin a different one.
+`profile/resume.md` is the default base. Add more as `profile/resume-<name>.md` (or drop `resume-<name>.pdf` and import it from **Settings → Base resumes**; you can also create one there as a copy of another and edit it in place). A first-line `<!-- label: Platform / backend -->` names it. With more than one base, **fit scoring runs against each** and the application uses the best-scoring one for tailoring, cover letters, answers and prep; the fit card shows every base's score and lets you pin a different one. Each base's row shows the name parsed from its own heading, so you can tell at a glance whose resume — or which version of yours — it is.
 
 ## ATS keyword check
 

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, type Application } from "./db.ts";
 import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
-import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, scoreFit, learnStyle, interviewPrep, quickFit, translateTitles, translateJob, type JobExtract } from "./ai.ts";
+import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, reviseAnswer, scoreFit, learnStyle, interviewPrep, quickFit, translateTitles, translateJob, type JobExtract } from "./ai.ts";
 import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, matchesLevel, classifyLevel, detectLang, isExcluded, isFresh, insertNew, purgeStale, applyFilters, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, AGGREGATORS, type Aggregator, type Posting } from "./feed.ts";
 import { atsCheck } from "./ats.ts";
 import { compilePdf } from "./latex.ts";
@@ -318,6 +318,20 @@ registerJob("questions", async ({ questions }, job, progress) => {
   writeQuestionsFile(app);
   logEvent(app.id, "questions", `${answers.length} answered`);
   return { application_id: app.id, count: answers.length };
+});
+
+registerJob("answer_revise", async ({ question_id, instruction }, job, progress) => {
+  const app = mustApp(String(job.application_id));
+  const q = db.prepare("SELECT * FROM questions WHERE id = ? AND application_id = ?").get(Number(question_id), app.id) as any;
+  if (!q) throw new Error("Question not found (it may have been removed)");
+  const instr = String(instruction ?? "").trim();
+  if (!instr) throw new Error('Give an instruction, e.g. "shorten" or "more specific"');
+  progress("Revising the answer…");
+  const answer = await reviseAnswer(await ctxFor(app), q.question, q.answer, instr);
+  db.prepare("UPDATE questions SET answer = ? WHERE id = ?").run(answer, q.id);
+  writeQuestionsFile(app);
+  logEvent(app.id, "questions", `Revised “${q.question.slice(0, 60)}${q.question.length > 60 ? "…" : ""}” — ${instr.slice(0, 60)}`);
+  return { application_id: app.id, question_id: q.id };
 });
 
 registerJob("learn", async ({ document_id }, _job, progress) => {
