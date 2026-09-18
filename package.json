@@ -1,8 +1,22 @@
 {
   "name": "job-tracker",
   "version": "1.0.0",
+  "description": "Local job-application tracker with Claude doing the repetitive work: capture postings, tailor resumes and cover letters, draft answers, and track the pipeline.",
   "type": "module",
   "private": true,
+  "license": "GPL-3.0-or-later",
+  "author": "Shailesh Pranav Rajendran",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shaileshpranav/Job-Tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shaileshpranav/Job-Tracker/issues"
+  },
+  "homepage": "https://github.com/shaileshpranav/Job-Tracker#readme",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.ts",
     "dev": "node --watch --env-file-if-exists=.env src/server.ts"
