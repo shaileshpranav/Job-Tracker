@@ -71,6 +71,16 @@ export const checks = {
     if (!String(r.role ?? "").trim()) p.push("role is empty");
     return p;
   }) as Check,
+  /** A single revised answer — no length floor (a "shorten" instruction can legitimately produce
+   * a one-liner), just placeholder/repeat detection. */
+  answerText: ((r: string) => {
+    const p: string[] = [];
+    const t = r.trim();
+    if (!t) p.push("empty answer");
+    else if (looksLikePlaceholder(t)) p.push(`looks like a placeholder: "${t.slice(0, 40)}"`);
+    if (/(\b\S+\b)(?:\s+\1\b){6,}/.test(r)) p.push("repeated tokens");
+    return p;
+  }) as unknown as Check,
   /** Long-form Markdown (resume, cover letter, prep) — very light. */
   markdown: ((r: string, _ctx: { sourceLength?: number }) => {
     const p: string[] = [];

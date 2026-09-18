@@ -671,7 +671,7 @@ function renderSettings() {
     resumes: () => `<div class="card"><h2>Base resumes</h2>
       <p class="muted">One base is fine; two or three (e.g. “AI engineer” and “Platform / backend”) let the fit score pick the better one per posting and tailor from it. Files live in <code>profile/</code> as <code>resume.md</code> (default) and <code>resume-&lt;name&gt;.md</code>; drop a matching <code>resume-&lt;name&gt;.pdf</code> to import one.</p>
       ${(state.profile?.resumes || []).map((r) => `<div class="base-row" data-base-key="${esc(r.key)}">
-        <div class="sp"><b>${esc(r.label)}</b> <span class="muted">· ${esc(r.file || r.source || "")}${r.hasMarkdown ? ` · ${r.words} words` : " · not imported yet"}${r.key === "default" ? " · default" : ""}</span></div>
+        <div class="sp"><b>${esc(r.label)}</b>${r.candidate ? ` <span class="muted">— ${esc(r.candidate)}</span>` : ""} <span class="muted">· ${esc(r.file || r.source || "")}${r.hasMarkdown ? ` · ${r.words} words` : " · not imported yet"}${r.key === "default" ? " · default" : ""}</span></div>
         ${r.hasMarkdown ? `<button class="ghost" data-base-edit="${esc(r.key)}">${state.baseEdit?.key === r.key ? "Close" : "Edit"}</button>` : `<button class="primary" data-base-import="${esc(r.key)}">Import from ${esc(r.source)}</button>`}
         ${r.key !== "default" && r.hasMarkdown ? `<button class="ghost" data-base-del="${esc(r.key)}" title="Delete this base">×</button>` : ""}
       </div>${state.baseEdit?.key === r.key ? `<div style="margin:6px 0 12px"><textarea class="doc" id="baseText" style="min-height:320px">${esc(state.baseEdit.markdown)}</textarea><div class="toolbar" style="margin:6px 0 0"><button class="primary" id="baseSave">Save</button><span class="muted">Add <code>&lt;!-- label: Platform / backend --&gt;</code> as the first line to name it.</span></div></div>` : ""}`).join("")}
@@ -1111,6 +1111,7 @@ function renderQuestions(a) {
     <h4>${esc(q.question)}</h4>
     <textarea class="ans" data-draft="q:${a.id}:${q.id}">${esc(q.answer)}</textarea>
     <div class="toolbar" style="margin:8px 0 0"><button data-copy="${q.id}">Copy</button><button data-saveq="${q.id}" data-dirty-primary="q:${a.id}:${q.id}">Save</button><span class="pill warn" data-dirty-for="q:${a.id}:${q.id}" hidden>unsaved</span><div class="sp"></div><button data-delq="${q.id}">Remove</button></div>
+    <div class="toolbar" style="margin:6px 0 0;flex-wrap:wrap"><span class="muted">Rewrite:</span><button class="ghost" data-revise="${q.id}" data-revise-instr="Shorten it, keeping the key point.">Shorten</button><button class="ghost" data-revise="${q.id}" data-revise-instr="Expand it with more concrete detail and examples.">Expand</button><input class="reviseIn" id="reviseIn${q.id}" placeholder="or describe how, e.g. “more specific”" style="flex:1;min-width:160px"><button data-revise="${q.id}" data-revise-input="reviseIn${q.id}">Revise</button></div>
   </div>`).join("")}`;
 }
 
@@ -1433,6 +1434,13 @@ function bind() {
   });
   document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => copyText($(`[data-q="${b.dataset.copy}"] .ans`).value).then((ok) => { b.textContent = ok ? "Copied" : "Blocked"; setTimeout(() => (b.textContent = "Copy"), 1200); }));
   document.querySelectorAll("[data-saveq]").forEach((b) => b.onclick = () => { const answer = $(`[data-q="${b.dataset.saveq}"] .ans`).value; run("Saving…", async () => { await api("PUT", `/api/questions/${b.dataset.saveq}`, { answer }); clearDrafts(`q:${a.id}:${b.dataset.saveq}`); state.app = await api("GET", `/api/applications/${a.id}`); }); });
+  document.querySelectorAll("[data-revise]").forEach((b) => b.onclick = () => {
+    const qid = b.dataset.revise;
+    const instruction = b.dataset.reviseInstr || (document.getElementById(b.dataset.reviseInput)?.value || "").trim();
+    if (!instruction) { state.err = "Describe how to revise it, e.g. “more specific”."; render(); return; }
+    clearDrafts(`q:${a.id}:${qid}`);
+    enqueue(`/api/questions/${qid}/revise`, { instruction }).then(() => { const inp = document.getElementById(b.dataset.reviseInput); if (inp) inp.value = ""; });
+  });
   document.querySelectorAll("[data-delq]").forEach((b) => b.onclick = () => {
     const qid = Number(b.dataset.delq), q = a.questions.find((x) => x.id === qid);
     undoable({

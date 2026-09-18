@@ -134,6 +134,14 @@ export async function answerQuestions(c: Ctx, questions: string[], priorQA: { qu
   return res.answers;
 }
 
+/** Rewrite one saved answer per a free-text instruction ("shorten", "make it more specific"). */
+export function reviseAnswer(c: Ctx, question: string, answer: string, instruction: string) {
+  return guarded("questions", checks.answerText, (r) => getLLMFor(r).generate(
+    `${getPrompt("questions_revise")} ${getPrompt("honesty")}\n\n${profileBlock(c)}`,
+    `${jobBlock(c.job)}\n\nQuestion: ${question}\n\nCurrent answer:\n${answer}\n\nInstruction: ${instruction}\n\nOutput only the revised answer.`,
+  ));
+}
+
 // ---------- Learn formatting preferences from manual edits ----------
 
 const StyleSchema = z.object({
