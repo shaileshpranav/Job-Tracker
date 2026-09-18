@@ -46,9 +46,21 @@ export function isPublicRoute(method: string | undefined, pathname: string): boo
   if (pathname.startsWith("/fonts/") && method === "GET") return true;
   if (pathname === "/api/bookmarklet" && method === "GET") return true;
   if (pathname === "/api/captures" && (method === "POST" || method === "OPTIONS")) return true;
+  if (pathname.startsWith("/api/autofill") && method === "OPTIONS") return true; // CORS preflight carries no credentials
   return false;
 }
 
+/** The autofill bookmarklet runs on another site, so it can't send the session cookie; it carries a
+ * signed token instead (same signing as sessions, so a password change revokes every old bookmarklet). */
+export const AUTOFILL_TOKEN_MS = 365 * 24 * 60 * 60 * 1000;
+export function autofillToken(): string {
+  return signSession(Date.now() + AUTOFILL_TOKEN_MS, authGeneration());
+}
+export function autofillAuthed(req: http.IncomingMessage, pathname: string): boolean {
+  if (!pathname.startsWith("/api/autofill")) return false;
+  const token = req.headers["x-jt-token"];
+  return typeof token === "string" && verifySession(token, authGeneration());
+}
 
 
 /** Check a login attempt with per-IP backoff after repeated failures. Throws HttpError on failure. */

@@ -451,6 +451,8 @@ function renderGoals() {
       </div>
     </div>
 
+    ${outcomesCard(g.outcomes)}
+
     <div class="card"><h3>Targets</h3>
       <div class="grid3">
         <div class="field"><label>Per day</label><input id="gDaily" type="number" min="0" max="50" value="${g.goals.daily}"></div>
@@ -461,6 +463,20 @@ function renderGoals() {
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)"><input type="checkbox" id="gWeekends" ${g.goals.weekends ? "checked" : ""} style="width:auto"> Count weekends (untick to make Sat/Sun rest days that don't break a streak)</label>
       <div class="toolbar" style="margin:12px 0 0"><button class="primary" id="gSave">Save targets</button><span class="muted">Set a target to 0 to ignore it.</span></div>
     </div>`;
+}
+
+// Rows of {label, sent, advanced, offers, advanceRate} as mini bars — how outcomes break down by resume/fit.
+function outcomeRows(rows, empty) {
+  if (!rows.length) return `<p class="muted">${empty}</p>`;
+  return rows.map((r) => `<div class="perf-row"><span class="sp">${esc(r.label)}</span><span class="muted">${r.sent} sent</span><div class="goal-bar perf-bar" title="${r.advanced} advanced${r.offers ? `, ${r.offers} offer${r.offers === 1 ? "" : "s"}` : ""}"><div style="width:${r.advanceRate}%"></div></div><b class="pct">${r.advanceRate}%</b></div>`).join("");
+}
+function outcomesCard(o) {
+  if (!o || o.total < 3) return "";
+  return `<div class="card"><h3>What's working</h3>
+    <p class="muted" style="margin-top:0">Share of sent applications that reached screening, interview or offer at any point — even ones later rejected.</p>
+    ${o.byResume.length > 1 ? `<h4 style="margin:14px 0 4px">By base resume</h4>${outcomeRows(o.byResume, "")}` : ""}
+    <h4 style="margin:14px 0 4px">By fit score</h4>${outcomeRows(o.byFit, "Not enough scored applications yet.")}
+  </div>`;
 }
 
 // Compact sidebar widget: today's progress + streak.
@@ -784,9 +800,11 @@ function renderHome() {
       ${state.activity === null ? '<p class="muted"><span class="spinner"></span>Loading…</p>' : state.activity.length ? state.activity.map((e) => `<div class="act"><small>${fmtTime(e.created_at)}</small><span>${EV_ICON[e.kind] || ""}<a data-open-app="${e.application_id}"><b>${esc(e.company)}</b></a> — ${esc(e.kind.replace("_", " "))}${e.detail ? `: <span class="muted">${esc(e.detail.slice(0, 90))}</span>` : ""}</span></div>`).join("") : '<p class="muted">Nothing yet — capture a posting to get going.</p>'}
     </div>
 
-    <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">Capture from your browser — the bookmarklet</summary>
-      <p style="margin-top:10px">Drag this to your bookmarks bar, then click it while viewing a job posting. It sends the page as <i>you</i> see it — logged in, fully rendered — so nothing gets blocked, and it clears human-verification hand-offs too.</p>
+    <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">From your browser — the bookmarklets</summary>
+      <p style="margin-top:10px"><b>Save</b> — click it while viewing a job posting. It sends the page as <i>you</i> see it — logged in, fully rendered — so nothing gets blocked, and it clears human-verification hand-offs too.</p>
       <p><a id="bookmarklet" class="bm" href="#" draggable="true">${icon("pin")}Save to Job Tracker</a> <button id="bmCopy" style="margin-left:8px">Copy code</button> <span class="muted">(can't drag? copy, create a bookmark, paste as its URL)</span></p>
+      <p style="margin-top:14px"><b>Fill</b> — click it on a company's application form. It works out which application the form belongs to from the page's address (or asks), then fills your name and contact details, attaches the resume and cover letter PDFs, and puts in answers you've already written. Questions it can't answer yet can be sent back here to draft; click Fill again once they're ready. It never presses submit.</p>
+      <p><a id="fillBookmarklet" class="bm" href="#" draggable="true">${icon("pin")}Fill application form</a> <button id="fillCopy" style="margin-left:8px">Copy code</button>${state.settings?.auth?.enabled ? ` <span class="muted">Tied to your password — drag a fresh one if you change it.</span>` : ""}</p>
     </details>
     <details class="card" style="padding:14px 22px"><summary style="cursor:pointer;font-weight:600">Answer bank — search everything you've answered before</summary>
       <input id="bankQ" placeholder="Search previous answers…" style="margin-top:10px"><div id="bank"></div>
@@ -897,7 +915,7 @@ function renderApply(a) {
     ${docRow("resume", "Resume")}
     ${docRow("cover_letter", "Cover letter")}
     <div class="apply-row"><span class="ic ${n ? "ok" : ""}">${n ? "✓" : "–"}</span><div class="sp"><b>Answers</b> <span class="muted">${n ? `${n} ready to paste into the form` : "none drafted yet"}</span></div>${n ? `<button id="applyCopyAns" title="Copies every question and answer as plain text">${icon("copy")} Copy all answers</button>` : `<button class="ghost" data-tab="questions">Questions tab</button>`}</div>
-    <div class="apply-row"><span class="ic">${icon("pin")}</span><div class="sp"><b>Autofill</b> <span class="muted">drag to your bookmarks bar, then click it on the application form to fill your details and any matching answers</span></div><a id="applyAutofill" class="bm" href="#" draggable="true">${icon("pin")}Fill this application</a></div>
+    <div class="apply-row"><span class="ic">${icon("pin")}</span><div class="sp"><b>Autofill</b> <span class="muted">click the <b>Fill application form</b> bookmarklet (Home) on their form — details, PDFs and answers go in, and unanswered questions come back here to draft. This link is the same thing pinned to ${esc(a.company)}, for when the form's address doesn't match the posting.</span></div><a id="applyAutofill" class="bm" href="#" draggable="true">${icon("pin")}Fill this application</a></div>
     <div class="apply-row"><span class="ic">${icon("folder")}</span><div class="sp"><b>Files</b> <span class="muted">applications/${esc(a.folder)}/ — drag the PDFs from Finder into the upload fields</span></div><button id="applyReveal" title="Rebuilds the PDFs if needed and opens the folder in Finder">Show in Finder</button></div>
     ${a.status === "saved" ? `<div class="apply-done">
       <label>Applied on <input type="date" id="applyDate" value="${localDate()}"></label>
@@ -1300,6 +1318,11 @@ function bind() {
     a.href = href; a.onclick = (e) => { e.preventDefault(); alert("Drag this link to your bookmarks bar, then click it while on a job posting."); };
     $("#bmCopy").onclick = () => copyText(href).then((ok) => { $("#bmCopy").textContent = ok ? "Copied" : "Blocked"; setTimeout(() => ($("#bmCopy").textContent = "Copy code"), 1200); });
   });
+  $("#fillBookmarklet") && api("GET", "/api/autofill/bookmarklet").then(({ href }) => {
+    const a = $("#fillBookmarklet"); if (!a) return;
+    a.href = href; a.onclick = (e) => { e.preventDefault(); alert("Drag this link to your bookmarks bar, then click it while on a company's application form."); };
+    $("#fillCopy").onclick = () => copyText(href).then((ok) => { $("#fillCopy").textContent = ok ? "Copied" : "Blocked"; setTimeout(() => ($("#fillCopy").textContent = "Copy code"), 1200); });
+  });
   $("#bankQ") && ($("#bankQ").oninput = debounce(async () => {
     const rows = await api("GET", `/api/qa-bank?q=${encodeURIComponent($("#bankQ").value)}`);
     $("#bank").innerHTML = rows.map((q) => `<div class="qa"><h4>${esc(q.question)}</h4><div class="muted" style="margin-bottom:6px">${esc(q.company)} · ${esc(q.role)}</div><div style="white-space:pre-wrap">${esc(q.answer)}</div></div>`).join("") || '<p class="muted">Nothing yet.</p>';
@@ -1576,7 +1599,9 @@ async function waitForCapture() {
   try { state.checklistHidden = localStorage.getItem("checklistHidden") === "1"; } catch {}
   api("GET", "/api/feed?status=open").then((f) => { state.feedHot = f.counts.unseen_hot; state.feedKeywords = f.settings.keywords.length; render(); }).catch(() => {});
   api("GET", "/api/activity").then((a) => { state.activity = a; render(); }).catch(() => { state.activity = []; });
-  if (new URLSearchParams(location.search).get("capture")) { state.sel = "new"; state.busy = "Waiting for the page from your browser…"; waitForCapture(); }
+  const params = new URLSearchParams(location.search);
+  if (params.get("capture")) { state.sel = "new"; state.busy = "Waiting for the page from your browser…"; waitForCapture(); }
+  else if (Number(params.get("app"))) { history.replaceState(null, "", "/"); state.tab = "questions"; await open(Number(params.get("app"))); return; }
   render();
   if ($("#bankQ")) $("#bankQ").dispatchEvent(new Event("input"));
 })();

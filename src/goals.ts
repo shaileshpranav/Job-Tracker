@@ -4,6 +4,7 @@
  * Only achievement unlock times are stored, so each is celebrated once.
  */
 import { db } from "./db.ts";
+import { listResumes } from "./profile.ts";
 
 db.exec("CREATE TABLE IF NOT EXISTS achievements (key TEXT PRIMARY KEY, unlocked_at TEXT NOT NULL DEFAULT (datetime('now')))");
 
@@ -111,7 +112,47 @@ export function stats() {
     heatmap, pipeline,
     maxDay: Math.max(0, ...byDay.values()),
     highFitApplied: rows.filter((r) => (r.fit_score ?? 0) >= 4).length,
+    outcomes: outcomeStats(),
   };
+}
+
+// ---------- outcomes: which resume / fit score actually gets responses ----------
+
+interface OutcomeGroup { key: string; label: string; sent: number; advanced: number; offers: number; advanceRate: number; offerRate: number }
+
+/** Per base-resume and per fit-score breakdown of how many sent applications ever reached
+ * screening/interview/offer, so tailoring choices can be judged by outcome, not just fit score.
+ * "Advanced" is read from the status-change history, not the current status, so a later
+ * rejection after an interview still counts as having advanced. */
+function outcomeStats() {
+  const rows = db.prepare("SELECT id, resume_key, fit_score, status FROM applications WHERE applied_at IS NOT NULL AND applied_at != ''")
+    .all() as { id: number; resume_key: string | null; fit_score: number | null; status: string }[];
+  const events = db.prepare("SELECT application_id, detail FROM events WHERE kind = 'status'").all() as { application_id: number; detail: string }[];
+  const advanced = new Set<number>(), offered = new Set<number>();
+  for (const e of events) {
+    if (/→\s*(screening|interview|offer)\b/i.test(e.detail)) advanced.add(e.application_id);
+    if (/→\s*offer\b/i.test(e.detail)) offered.add(e.application_id);
+  }
+  const labels = new Map(listResumes().map((r) => [r.key, r.label]));
+
+  function group(keyOf: (r: (typeof rows)[number]) => string, labelOf: (k: string) => string): OutcomeGroup[] {
+    const m = new Map<string, Omit<OutcomeGroup, "key" | "advanceRate" | "offerRate">>();
+    for (const r of rows) {
+      const k = keyOf(r);
+      const g = m.get(k) ?? { label: labelOf(k), sent: 0, advanced: 0, offers: 0 };
+      g.sent++;
+      if (advanced.has(r.id) || r.status === "screening" || r.status === "interview" || r.status === "offer") g.advanced++;
+      if (offered.has(r.id) || r.status === "offer") g.offers++;
+      m.set(k, g);
+    }
+    return [...m.entries()].map(([key, g]) => ({ key, ...g, advanceRate: Math.round((g.advanced / g.sent) * 100), offerRate: Math.round((g.offers / g.sent) * 100) }));
+  }
+
+  const byResume = group((r) => r.resume_key || "—", (k) => (k === "—" ? "Unscored" : (labels.get(k) ?? k))).sort((a, b) => b.sent - a.sent);
+  const byFit = group((r) => (r.fit_score == null ? "—" : String(r.fit_score)), (k) => (k === "—" ? "Not scored" : `${k}/5 fit`))
+    .sort((a, b) => (a.key === "—" ? 1 : b.key === "—" ? -1 : Number(b.key) - Number(a.key)));
+
+  return { total: rows.length, byResume, byFit };
 }
 
 // ---------- levels ----------

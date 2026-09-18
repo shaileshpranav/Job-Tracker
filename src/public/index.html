@@ -180,6 +180,9 @@
   .goal-bar { flex:1; height:5px; background:var(--line); border-radius:99px; overflow:hidden; } .goal-bar div { height:100%; background:var(--accent); border-radius:99px; transition:width .3s; }
   .goal-mini.met .goal-bar div { background:var(--ok); }
   .streak-mini { color:var(--mute); display:inline-flex; align-items:center; gap:3px; } .streak-mini.hot { color:var(--warn); font-weight:600; }
+  .perf-row { display:flex; align-items:center; gap:10px; padding:6px 0; border-top:1px solid var(--line-2); font-size:13px; } .perf-row:first-child { border-top:none; }
+  .perf-row .sp { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .perf-row .perf-bar { width:90px; flex:none; } .perf-row .pct { width:38px; text-align:right; flex:none; font-family:var(--mono); font-size:12px; }
   .grid3 { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; }
   .lvl-badge { width:46px; height:46px; border-radius:10px; background:var(--ink); color:var(--bg); display:flex; align-items:center; justify-content:center; font:600 22px var(--serif); margin-right:12px; }
   .xp { height:6px; background:var(--line); border-radius:99px; overflow:hidden; margin-top:14px; } .xp div { height:100%; background:var(--accent); border-radius:99px; transition:width .4s; }
