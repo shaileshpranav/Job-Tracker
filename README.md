@@ -1,5 +1,8 @@
 # Job Tracker
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+![Node](https://img.shields.io/badge/node-%E2%89%A522.6-brightgreen)
+
 Local job-application tracker with Claude doing the repetitive work:
 
 - **Capture** — paste a posting URL; company, role, location, salary, requirements and any application questions are extracted and logged.
@@ -10,11 +13,17 @@ Local job-application tracker with Claude doing the repetitive work:
 ## Setup
 
 ```bash
+git clone https://github.com/shaileshpranav/Job-Tracker.git
+cd Job-Tracker
 npm install
 cp .env.example .env        # add an API key (or use Ollama — no key needed)
 # drop resume.pdf or resume.docx into profile/
 npm start                    # http://localhost:4321
 ```
+
+Everything the app writes — your resume, tracked applications, and the SQLite database — lives
+under `profile/`, `applications/` and `data/`, all gitignored; nothing you enter ever gets
+committed or leaves your machine on its own.
 
 ## Capturing postings that block scrapers (LinkedIn, Workday, …)
 
@@ -193,3 +202,19 @@ templates/      resume.tex, letter.tex — edit to restyle
 - Anthropic default model is `claude-opus-5`, with server-side refusal fallback enabled.
 - Sites that block scrapers (some LinkedIn/Workday pages): use the "paste the description" option under New.
 - Deleting an application removes it from the database but leaves its folder on disk.
+
+## Contributing
+
+Issues and PRs are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, code
+conventions, and what kinds of changes fit the project's scope. [`CLAUDE.md`](CLAUDE.md) has the
+fuller architecture notes if you're making a structural change.
+
+## Security
+
+This is a local, single-user app with no telemetry — see the **Security** section above for what's
+protected and how. To report a vulnerability, see [`SECURITY.md`](SECURITY.md) rather than opening
+a public issue.
+
+## License
+
+[GPL-3.0](LICENSE) — see the `LICENSE` file for the full text.
