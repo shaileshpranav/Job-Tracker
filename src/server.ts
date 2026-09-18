@@ -10,16 +10,16 @@ import { enqueue, listJobs, getJob, cancelJob, retryJob, resumeJob, resumeMatchi
 import { profileStatus, loadResume, saveResume, deleteResume, hasAnyResume, listResumes, DEFAULT_KEY } from "./profile.ts";
 import { atsCheck } from "./ats.ts";
 import { guardSettings, saveGuardSettings, modelStats, clearModelStats, resolveFallback, isUnreliable } from "./guard.ts";
-import { printPage } from "./markdown.ts";
+import { printPage, mdToPlain } from "./markdown.ts";
 import { llmSettings, saveLlmSettings, saveTaskRoute, getStyle, saveStyle, PROVIDERS, authStatus, authRequired, setAuthPassword, type Provider, type Task, type StyleKind } from "./settings.ts";
 import { listModels } from "./llm.ts";
 import { stats, getGoals, saveGoals, checkAchievements, listAchievements, today } from "./goals.ts";
 import { spawn } from "node:child_process";
 import { HttpError, readJson, send } from "./http.ts";
-import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin } from "./auth.ts";
+import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCookie, attemptLogin, autofillToken, autofillAuthed } from "./auth.ts";
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf, createApplication } from "./jobs.ts";
-import { autofillBookmarklet, candidateContact } from "./autofill.ts";
+import { autofillBookmarklet, candidateContact, siteKey } from "./autofill.ts";
 import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, applyFilters, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
 import { preflight, tasksFor, queueJob } from "./preflight.ts";
 import { pdfFileName, candidateName, DEFAULT_PDF_NAME } from "./filenames.ts";
@@ -57,6 +57,26 @@ function appDetail(app: Application) {
     questions: db.prepare("SELECT * FROM questions WHERE application_id = ? ORDER BY id").all(app.id),
     events: db.prepare("SELECT * FROM events WHERE application_id = ? ORDER BY id DESC").all(app.id),
   };
+}
+
+const CORS = { "access-control-allow-origin": "*" };
+function cors(res: http.ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { ...CORS, "content-type": "application/json" });
+  return res.end(JSON.stringify(body));
+}
+
+/** The application an external form belongs to: exact posting URL first, then the only application on
+ * that employer's site (host, or host + company slug on shared ATS domains). Null when ambiguous. */
+function autofillMatch(pageUrl: string): Application | null {
+  if (!pageUrl) return null;
+  const rows = db.prepare("SELECT * FROM applications WHERE url IS NOT NULL AND url != '' ORDER BY updated_at DESC").all() as unknown as Application[];
+  const want = canonicalUrl(pageUrl);
+  const exact = rows.find((a) => canonicalUrl(a.url!) === want);
+  if (exact) return exact;
+  const site = siteKey(pageUrl);
+  if (!site) return null;
+  const same = rows.filter((a) => siteKey(a.url!) === site && a.status !== "rejected" && a.status !== "withdrawn");
+  return same.length === 1 ? same[0] : null;
 }
 
 /** An application that already covers this posting — same canonical URL, or the same company + role when those are given. */
@@ -468,22 +488,78 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     if (process.platform === "darwin") spawn("open", [dir], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
     return send(res, 200, { ok: process.platform === "darwin", path: dir, files });
   }
-  // Autofill: a per-application bookmarklet (same pattern as the capture one) that fills your
-  // contact info and this application's saved Q&A answers into the form on the page you're on.
+  // Autofill: a bookmarklet that runs on the company's application form and fills your contact
+  // info, PDFs and saved answers. One universal link (picks the application from the page URL)
+  // plus a per-application one in the apply pack. Cross-origin, so every route here speaks CORS
+  // and answers errors in-band — the bookmarklet can't read a response without the CORS header.
+  if (m("GET", /^\/api\/autofill\/bookmarklet$/)) {
+    const origin = `http://${req.headers.host}`;
+    return send(res, 200, { href: `javascript:${encodeURIComponent(autofillBookmarklet(origin, autofillToken()))}`, origin });
+  }
   if ((r = m("GET", /^\/api\/applications\/(\d+)\/autofill-bookmarklet$/))) {
     const app = mustApp(r[1]);
     const origin = `http://${req.headers.host}`;
-    return send(res, 200, { href: `javascript:${encodeURIComponent(autofillBookmarklet(origin, app.id))}`, origin });
+    return send(res, 200, { href: `javascript:${encodeURIComponent(autofillBookmarklet(origin, autofillToken(), app.id))}`, origin });
   }
-  if (req.method === "OPTIONS" && /^\/api\/applications\/\d+\/autofill$/.test(url.pathname)) {
-    res.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type", "access-control-allow-methods": "GET" });
+  if (req.method === "OPTIONS" && url.pathname.startsWith("/api/autofill")) {
+    res.writeHead(204, { ...CORS, "access-control-allow-headers": "content-type, x-jt-token", "access-control-allow-methods": "GET, POST", "access-control-max-age": "600" });
     return res.end();
   }
-  if ((r = m("GET", /^\/api\/applications\/(\d+)\/autofill$/))) {
-    const app = mustApp(r[1]);
-    const questions = db.prepare("SELECT question, answer FROM questions WHERE application_id = ? AND answer IS NOT NULL AND trim(answer) != ''").all(app.id);
-    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-    return res.end(JSON.stringify({ contact: candidateContact(app.resume_key), questions }));
+  if (m("GET", /^\/api\/autofill$/)) {
+    try {
+      const page = url.searchParams.get("url") ?? "";
+      const pinned = Number(url.searchParams.get("app")) || null;
+      const app = pinned ? getApp(pinned) : autofillMatch(page);
+      if (!app) {
+        if (pinned) throw new HttpError(404, "That application no longer exists — drag a fresh Fill link from the tracker.");
+        const candidates = db.prepare("SELECT id, company, role, status FROM applications WHERE status NOT IN ('rejected','withdrawn') ORDER BY updated_at DESC LIMIT 12").all();
+        return cors(res, 200, { candidates });
+      }
+      const questions = db.prepare("SELECT question, answer FROM questions WHERE application_id = ? AND trim(answer) != '' ORDER BY id").all(app.id);
+      const seen = new Set<string>();
+      const bank = (db.prepare("SELECT question, answer FROM questions WHERE application_id != ? AND trim(answer) != '' ORDER BY id DESC LIMIT 200").all(app.id) as { question: string; answer: string }[])
+        .filter((q) => { const k = q.question.trim().toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 80);
+      const latest = (kind: string) => db.prepare("SELECT id, content, tex FROM documents WHERE application_id = ? AND kind = ? ORDER BY id DESC LIMIT 1").get(app.id, kind) as { id: number; content: string; tex: string | null } | undefined;
+      const resume = latest("resume"), letter = latest("cover_letter");
+      const documents: Record<string, { id: number; file_name: string }> = {};
+      if (isLatexReady()) {
+        if (resume) documents.resume = { id: resume.id, file_name: pdfFileName(app, "resume") };
+        if (letter) documents.cover_letter = { id: letter.id, file_name: pdfFileName(app, "cover_letter") };
+      }
+      return cors(res, 200, {
+        application: { id: app.id, company: app.company, role: app.role },
+        contact: candidateContact(app.resume_key),
+        questions, bank, documents,
+        // Only when the letter is still generated Markdown — hand-edited tex has no plain-text source
+        // we can trust to match the attached PDF.
+        cover_letter: letter && letter.tex == null ? mdToPlain(letter.content) : null,
+      });
+    } catch (e: any) { return cors(res, e instanceof HttpError ? e.status : 500, { error: e.message ?? String(e) }); }
+  }
+  if ((r = m("GET", /^\/api\/autofill\/doc\/(\d+)\.pdf$/))) {
+    try {
+      const doc = db.prepare("SELECT d.kind, a.company, a.resume_key FROM documents d JOIN applications a ON a.id = d.application_id WHERE d.id = ?").get(Number(r[1])) as any;
+      if (!doc) throw new HttpError(404, "Document not found");
+      const { pdf } = await buildPdf(Number(r[1]));
+      res.writeHead(200, { ...CORS, "content-type": "application/pdf", "content-disposition": `inline; filename="${pdfFileName(doc, doc.kind)}"`, "cache-control": "no-store" });
+      return res.end(pdf);
+    } catch (e: any) { return cors(res, e instanceof HttpError ? e.status : 500, { error: e.message ?? String(e) }); }
+  }
+  // Questions the form asked that have no answer yet: draft them, so the next Fill can place them.
+  if (m("POST", /^\/api\/autofill\/questions$/)) {
+    try {
+      const body = await readJson(req);
+      const app = getApp(Number(body.app));
+      if (!app) throw new HttpError(404, "Application not found");
+      const have = new Set((db.prepare("SELECT question FROM questions WHERE application_id = ?").all(app.id) as { question: string }[]).map((q) => q.question.trim().toLowerCase()));
+      const asked: string[] = Array.isArray(body.questions) ? body.questions.map((q: unknown) => String(q).trim()).filter(Boolean) : [];
+      const fresh = [...new Set(asked)].filter((q) => !have.has(q.toLowerCase()));
+      if (!fresh.length) return cors(res, 200, { queued: 0, skipped: asked.length });
+      if (body.url && !app.url) db.prepare("UPDATE applications SET url = ? WHERE id = ?").run(String(body.url), app.id);
+      const job = await queueJob("questions", `Answers (${fresh.length}) — ${app.company}`, { questions: fresh }, app.id);
+      logEvent(app.id, "questions_found", fresh.join("\n"));
+      return cors(res, 202, { queued: fresh.length, skipped: asked.length - fresh.length, job: job.id });
+    } catch (e: any) { return cors(res, e instanceof HttpError ? e.status : 500, { error: e.message ?? String(e) }); }
   }
 
   // ATS keyword check: deterministic comparison of a document (or a base resume) with the posting
@@ -624,7 +700,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
 http.createServer(async (req, res) => {
   try {
     const pathname = new URL(req.url!, "http://x").pathname;
-    if (!isPublicRoute(req.method, pathname) && !isAuthed(req)) {
+    if (!isPublicRoute(req.method, pathname) && !isAuthed(req) && !autofillAuthed(req, pathname)) {
       if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) return send(res, 200, LOGIN_PAGE, "text/html");
       throw new HttpError(401, "Authentication required");
     }
@@ -635,6 +711,7 @@ http.createServer(async (req, res) => {
     const msg = /authentication method|x-api-key|authentication_error/i.test(e.message ?? "")
       ? "No Anthropic API key. Add one in ⚙ Settings (or ANTHROPIC_API_KEY in .env), or switch provider."
       : e.message ?? String(e);
+    if (req.url?.startsWith("/api/autofill")) return cors(res, status, { error: msg }); // the bookmarklet can't read a 401 without CORS
     send(res, status, { error: msg });
   }
 }).listen(PORT, HOST, () => {

@@ -37,6 +37,20 @@ export function mdToHtml(md: string): string {
   return out.join("\n");
 }
 
+/** Markdown → plain text for pasting into forms: headings and emphasis markers dropped, bullets kept. */
+export function mdToPlain(md: string): string {
+  return md.replace(/\r/g, "")
+    .replace(/^#{1,6}\s+(.*)$/gm, "$1")
+    .replace(/^[ \t]*[-*+][ \t]+/gm, "- ").replace(/^[ \t]*(\d+)[.)][ \t]+/gm, "$1. ")
+    .replace(/\*\*(.+?)\*\*/g, "$1").replace(/__(.+?)__/g, "$1")
+    .replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)/g, "$1$2").replace(/(^|[^_\w])_(?!\s)(.+?)_(?!\w)/g, "$1$2")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$/gm, "")
+    .replace(/\\([\\`*_{}[\]()#+\-.!])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function printPage(title: string, md: string, kind: "resume" | "cover_letter" = "resume"): string {
   const compact = kind === "resume";
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
