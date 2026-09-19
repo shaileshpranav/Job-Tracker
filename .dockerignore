@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+
+# Personal data and secrets — never belongs in an image, and the Dockerfile doesn't COPY these
+# paths anyway (they're meant to be volumes; see docker-compose.yml)
+data
+applications
+profile
+.env
+
+# VCS / editor / OS cruft
+.git
+.gitignore
+.DS_Store
