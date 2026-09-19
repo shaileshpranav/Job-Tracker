@@ -1,0 +1,17 @@
+services:
+  job-tracker:
+    build: .
+    ports:
+      - "4321:4321"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # HOST=0.0.0.0 is already the image default (needed for the container's network
+      # namespace); override PORT here too if you change the left side of the port mapping.
+      PORT: "4321"
+    volumes:
+      - ./data:/app/data
+      - ./applications:/app/applications
+      - ./profile:/app/profile
+    restart: unless-stopped

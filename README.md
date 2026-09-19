@@ -25,6 +25,25 @@ Everything the app writes — your resume, tracked applications, and the SQLite 
 under `profile/`, `applications/` and `data/`, all gitignored; nothing you enter ever gets
 committed or leaves your machine on its own.
 
+### Docker
+
+```bash
+git clone https://github.com/shaileshpranav/Job-Tracker.git
+cd Job-Tracker
+cp .env.example .env        # add an API key (or use Ollama — see below)
+# drop resume.pdf or resume.docx into profile/
+docker compose up -d        # http://localhost:4321
+```
+
+`profile/`, `applications/` and `data/` are bind-mounted into the container, so they persist and
+stay in the same place on disk as a native install. The image doesn't include LaTeX (it would add
+gigabytes for a feature most people can live without) — PDF export automatically falls back to the
+browser-print flow described above; if you want real LaTeX-compiled PDFs from Docker, extend the
+image yourself with `texlive-xetex` and `latexmk`.
+
+To reach a local Ollama from the container, use `OLLAMA_HOST=http://host.docker.internal:11434` in
+`.env` rather than `localhost`, since `localhost` inside the container means the container itself.
+
 ## Capturing postings that block scrapers (LinkedIn, Workday, …)
 
 The home screen has a **Save to Job Tracker** bookmarklet. Drag it to your bookmarks bar; click it while viewing a posting in your normal, logged-in browser. It sends the page *as rendered* to the app (which must be running) and opens the new application — no scraping, so nothing gets blocked. The original page text is kept with the application, so **↻ Re-extract** on the Job tab can re-run extraction later with a better model, and **↻ Fetch again** re-scrapes the URL. Entries that look thin (no location/requirements) get a hint banner pointing at these.
