@@ -7,7 +7,7 @@ import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, type Application } from "./db.ts";
 import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
 import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, reviseAnswer, scoreFit, learnStyle, interviewPrep, quickFit, translateTitles, translateJob, type JobExtract } from "./ai.ts";
-import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, matchesLevel, classifyLevel, detectLang, isExcluded, isFresh, insertNew, purgeStale, applyFilters, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, AGGREGATORS, type Aggregator, type Posting } from "./feed.ts";
+import { feedSettings, aggregatorList, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, matchesLevel, classifyLevel, detectLang, isExcluded, isFresh, insertNew, purgeStale, applyFilters, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, type Posting } from "./feed.ts";
 import { atsCheck } from "./ats.ts";
 import { compilePdf } from "./latex.ts";
 import { registerJob, enqueue, NeedsYou } from "./queue.ts";
@@ -131,7 +131,7 @@ function screenItem(id: number, bases: { key: string; md: string }[]) {
 registerJob("feed_refresh", async (_p, _job, progress) => {
   const s = feedSettings();
   const aggOpts = { locations: s.locations, adzuna: s.adzuna };
-  const sources = [...s.boards.map((b) => ({ name: b, run: () => fetchBoard(b) })), ...(Object.keys(AGGREGATORS) as Aggregator[]).filter((a) => s.aggregators[a]).map((a) => ({ name: a, run: () => fetchAggregator(a, s.keywords, aggOpts) }))];
+  const sources = [...s.boards.map((b) => ({ name: b, run: () => fetchBoard(b) })), ...Object.keys(aggregatorList()).filter((a) => s.aggregators[a]).map((a) => ({ name: a, run: () => fetchAggregator(a, s.keywords, aggOpts) }))];
   if (!sources.length) throw new Error("No sources configured — add company boards or enable an aggregator in the feed settings");
   const report: Record<string, string> = {};
   const kept: Posting[] = [];

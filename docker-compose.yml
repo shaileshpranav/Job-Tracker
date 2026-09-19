@@ -14,4 +14,6 @@ services:
       - ./data:/app/data
       - ./applications:/app/applications
       - ./profile:/app/profile
+      # Your connectors; see extensions/README.md. Remove this line if you don't use any.
+      - ./extensions:/app/extensions
     restart: unless-stopped

@@ -105,6 +105,17 @@ profile contact info and this application's saved answers and fills form fields 
 client-side. When a captured page turns out to be behind a bot check, the job parks via `NeedsYou`
 (see queue section above) and the same bookmarklet mechanism resumes it once the user clears the check.
 
+### Extensions (`extensions.ts`)
+
+User-installed connectors loaded from `extensions/` at startup (top-level `await` in the module, so
+importing it yields a populated registry). An extension adds a board provider, an aggregator, and/or
+a capture handler; `feed.ts` falls through to the registry when a `provider:token` or aggregator id
+isn't built in, and `scrape.ts` offers each posting URL to extension capture handlers before its own
+generic path. The bundled sources stay JSON-only on purpose — extensions are the documented escape
+hatch for anything that can't meet that bar, so new scraper-shaped sources belong there, not in
+`feed.ts`. Note `scrape.ts` imports `extensions.ts` dynamically: the dependency runs the other way
+statically (extensions needs `htmlToText`/`jobPostingFromJsonLd`), and this avoids the cycle.
+
 ### Feed (`feed.ts`)
 
 Pulls postings from JSON-only sources (Greenhouse/Lever/Ashby/Workable/SmartRecruiters company boards,

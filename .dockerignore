@@ -6,6 +6,7 @@ npm-debug.log
 data
 applications
 profile
+extensions
 .env
 
 # VCS / editor / OS cruft

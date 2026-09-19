@@ -91,6 +91,12 @@ export async function captureFromUrl(url: string, verifiedText?: string): Promis
     return { ...(await extractJob(text, url)), source_text: text };
   }
 
+  // An installed extension may know this site better than the generic path below.
+  // Imported lazily: extensions.ts imports this module for its HTML helpers.
+  const { captureViaExtension, extensionContext } = await import("./extensions.ts");
+  const claimed = await captureViaExtension(url, extensionContext(() => {}, { keywords: [], locations: [] }));
+  if (claimed) return { ...(await extractJob(claimed.text, url)), source_text: claimed.text };
+
   let text = "", blocked: string | null = null;
   try {
     const res = await fetch(url, { headers: { "user-agent": UA, accept: "text/html" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
