@@ -5,4 +5,8 @@ applications/
 profile/*
 !profile/.gitkeep
 !profile/README.md
+# Installed extensions are yours, not the project's — the docs and examples are tracked.
+extensions/*
+!extensions/README.md
+!extensions/examples/
 .DS_Store

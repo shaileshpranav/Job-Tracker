@@ -11,9 +11,9 @@ RUN npm ci --omit=dev
 COPY src ./src
 COPY templates ./templates
 
-# profile/, data/ and applications/ are meant to be volumes (see docker-compose.yml) — created here
-# so the app has somewhere to write before a volume is mounted over them.
-RUN mkdir -p data applications profile && \
+# profile/, data/, applications/ and extensions/ are meant to be volumes (see docker-compose.yml) —
+# created here so the app has somewhere to write before a volume is mounted over them.
+RUN mkdir -p data applications profile extensions && \
     addgroup -S jobtracker && adduser -S jobtracker -G jobtracker && \
     chown -R jobtracker:jobtracker /app
 USER jobtracker

@@ -20,7 +20,8 @@ import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCook
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf, createApplication } from "./jobs.ts";
 import { autofillBookmarklet, candidateContact, siteKey } from "./autofill.ts";
-import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, applyFilters, AGGREGATORS, LEVELS, LEVEL_LABELS } from "./feed.ts";
+import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, applyFilters, aggregatorList, isBoardId, boardProviders, LEVELS, LEVEL_LABELS } from "./feed.ts";
+import { extensions, extensionErrors, EXT_DIR } from "./extensions.ts";
 import { preflight, tasksFor, queueJob } from "./preflight.ts";
 import { pdfFileName, candidateName, DEFAULT_PDF_NAME } from "./filenames.ts";
 import { canonicalUrl } from "./scrape.ts";
@@ -204,6 +205,15 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     return send(res, 200, await listModels(provider));
   }
 
+  // Installed extensions (read-only: installing one means dropping a file in and restarting).
+  if (m("GET", /^\/api\/extensions$/)) {
+    return send(res, 200, {
+      dir: EXT_DIR.startsWith(ROOT) ? path.relative(ROOT, EXT_DIR) || "extensions" : EXT_DIR,
+      extensions: extensions().map((e) => ({ id: e.id, label: e.label, kind: e.kind ?? null, file: e.file, capture: Boolean(e.capture), board: e.kind === "board" })),
+      errors: extensionErrors(),
+    });
+  }
+
   // profile
   if (m("GET", /^\/api\/profile$/)) {
     const status = profileStatus();
@@ -365,14 +375,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if (m("GET", /^\/api\/feed$/)) {
     const status = url.searchParams.get("status");
     const items = listFeed(status && status !== "open" ? status : null) as any[];
-    const payload = { items, settings: feedSettings(), aggregators: AGGREGATORS, levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABELS[l] })), lastRefresh: feedLastRefresh(), counts: feedCounts() };
+    const payload = { items, settings: feedSettings(), aggregators: aggregatorList(), levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABELS[l] })), lastRefresh: feedLastRefresh(), counts: feedCounts() };
     if (url.searchParams.get("seen") === "1") markSeen(items.filter((i) => !i.seen).map((i) => i.id)); // viewing the list clears "new"
     return send(res, 200, payload);
   }
   if (m("POST", /^\/api\/feed\/discover$/)) {
     const { input } = await readJson(req);
     const found = await discoverBoard(String(input ?? ""));
-    if (!found) return send(res, 200, { ok: false, error: "No Greenhouse / Lever / Ashby / Workable / SmartRecruiters board found there. Try the company's careers page URL, or the board id directly (greenhouse:<token>)." });
+    if (!found) return send(res, 200, { ok: false, error: `No board found there (looked for ${boardProviders().join(", ")}). Try the company's careers page URL, or the board id directly (greenhouse:<token>).` });
     try { const jobs = await fetchBoard(found.board); return send(res, 200, { ok: true, board: found.board, via: found.via, guessed: found.via.startsWith("guessed"), count: jobs.length, sample: jobs.slice(0, 3).map((j) => j.title) }); }
     catch (e: any) { return send(res, 200, { ok: false, board: found.board, error: `Found ${found.board} but it didn't respond: ${e.message}` }); }
   }
@@ -411,7 +421,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if (m("POST", /^\/api\/feed\/test$/)) {
     const { board } = await readJson(req);
     const b = String(board ?? "").trim().toLowerCase().replace(/\s+/g, "");
-    if (!/^(greenhouse|lever|ashby|workable|smartrecruiters):[\w.-]+$/.test(b)) throw new HttpError(400, "Use provider:token, e.g. greenhouse:stripe");
+    if (!isBoardId(b)) throw new HttpError(400, `Use provider:token, e.g. greenhouse:stripe (known providers: ${boardProviders().join(", ")})`);
     try { const jobs = await fetchBoard(b); return send(res, 200, { ok: true, count: jobs.length, sample: jobs.slice(0, 3).map((j) => j.title) }); }
     catch (e: any) { return send(res, 200, { ok: false, error: e.message }); }
   }

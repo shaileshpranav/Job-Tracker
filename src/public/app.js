@@ -17,6 +17,7 @@ const ICONS = {
   resume: '<path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
   documents: '<path d="M15 3H9a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V8z"/><path d="M15 3v5h4M5 8v12a1 1 0 0 0 1 1h9"/>',
   prompts: '<path d="M4 5h16v11H9l-5 4z"/>',
+  plug: '<path d="M9 3v6M15 3v6"/><path d="M6 9h12v3a6 6 0 0 1-12 0z"/><path d="M12 18v3"/>',
   security: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   flame: '<path d="M12 2.5c.8 3.2 4.8 5.2 4.8 9.7a4.8 4.8 0 0 1-9.6 0c0-1.9.8-3.4 1.9-4.6.3 1.4 1 2.3 2.1 2.5C10.2 7.6 10.3 5 12 2.5z"/><path d="M12 21a2.6 2.6 0 0 1-2.6-2.6c0-1.3 1-2 1.4-3 .4 1 1.6 1.5 1.6 3A2.6 2.6 0 0 1 12 21z" fill="currentColor" stroke="none" opacity=".35"/>',
   pin: '<path d="M7 3h10v18l-5-4-5 4z"/>',
@@ -47,7 +48,7 @@ const ICONS = {
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: false, baseEdit: null, guard: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null, settingsSection: "model", newMode: "capture", viewDoc: null, headOpen: false, statusOpen: false, feedCursor: -1, noticeAction: null, pendingDeletes: new Set() };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: false, baseEdit: null, guard: null, extensions: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null, settingsSection: "model", newMode: "capture", viewDoc: null, headOpen: false, statusOpen: false, feedCursor: -1, noticeAction: null, pendingDeletes: new Set() };
 try { state.atsOpen = localStorage.getItem("atsOpen") === "1"; } catch { state.atsOpen = false; }
 try { state.settingsSection = localStorage.getItem("settingsSection") || "model"; } catch {}
 
@@ -619,7 +620,7 @@ const PROVIDER_HELP = {
 
 function modelsFor(provider) { return state.modelCache[provider] || []; }
 
-const SETTINGS_SECTIONS = [["model", "model", "Model"], ["tasks", "routes", "Per-task models"], ["guard", "guard", "Quality guard"], ["resumes", "resume", "Base resumes"], ["documents", "documents", "Documents"], ["prompts", "prompts", "Prompts"], ["security", "security", "Security"]];
+const SETTINGS_SECTIONS = [["model", "model", "Model"], ["tasks", "routes", "Per-task models"], ["guard", "guard", "Quality guard"], ["resumes", "resume", "Base resumes"], ["documents", "documents", "Documents"], ["prompts", "prompts", "Prompts"], ["extensions", "plug", "Extensions"], ["security", "security", "Security"]];
 function renderSettings() {
   const s = state.settings;
   const models = modelsFor(s.provider);
@@ -631,6 +632,7 @@ function renderSettings() {
     model: !local && !keyMask ? '<span class="dot-mark bad" title="No API key for this provider"></span>' : "",
     guard: state.guard?.unreliable.length ? `<span class="pill bad" title="Tasks routed to models that returned junk">${state.guard.unreliable.length}</span>` : "",
     security: !s.auth.enabled ? '<span class="dot-mark warn" title="No password set"></span>' : "",
+    extensions: state.extensions?.errors.length ? `<span class="pill bad" title="Extension files that failed to load">${state.extensions.errors.length}</span>` : "",
   };
   const cards = {
     model: () => `<div class="card"><h2>Default model</h2>
@@ -696,6 +698,14 @@ function renderSettings() {
         <textarea class="styleText" style="min-height:120px;margin-top:6px" placeholder="- Keep every bullet to one line and start it with a verb\n- Put Education last\n- Dates as 'Mon YYYY – Mon YYYY'">${esc(state.style[k])}</textarea>
         <div class="toolbar" style="margin:6px 0 0"><button class="primary" data-style-save="${k}">Save</button>${state.style[k] ? `<button data-style-reset="${k}">Clear</button>` : ""}</div>
       </details>`).join("") : '<p class="muted">Loading…</p>'}
+    </div>`,
+    extensions: () => `<div class="card"><h2>Extensions</h2>
+      <p class="muted">Connectors for boards the built-in sources don't cover. The bundled sources stick to official JSON endpoints; extensions are where anything else goes — an internal API, a site that needs HTML parsing, a private board. They run <b>in the server process</b> with the same access the app has, so only install ones you've read. Drop a <code>.ts</code> file into <code>${esc(state.extensions?.dir || "extensions")}/</code> and restart; see that folder's <code>README.md</code> for the contract and examples.</p>
+      ${!state.extensions ? '<p class="muted"><span class="spinner"></span>Loading…</p>' : `
+        ${state.extensions.extensions.length ? state.extensions.extensions.map((e) => `<div class="base-row">
+          <div class="sp"><b>${esc(e.label)}</b> <span class="muted">· <code>${esc(e.id)}</code>${e.kind ? ` · ${e.kind === "board" ? `company board — add as <code>${esc(e.id)}:&lt;token&gt;</code>` : "aggregator — enable it in the feed settings"}` : ""}${e.capture ? " · handles capture" : ""} · <code>${esc(e.file)}</code></span></div>
+        </div>`).join("") : '<p class="muted">None installed.</p>'}
+        ${state.extensions.errors.length ? `<div class="banner" style="margin-top:10px">${icon("warn")} ${state.extensions.errors.length} file${state.extensions.errors.length === 1 ? "" : "s"} failed to load:${state.extensions.errors.map((x) => `<div style="margin-top:4px"><code>${esc(x.file)}</code> — ${esc(x.error)}</div>`).join("")}</div>` : ""}`}
     </div>`,
     prompts: () => `<div class="card"><h2>Prompts</h2>
       <p class="muted">Edit the instructions each task sends to the model. Your resume, notes, the job posting and previous answers are appended automatically — these are just the instruction parts. Blank = default.</p>
@@ -1223,6 +1233,7 @@ function bind() {
       run("Creating base…", async () => { const r = await api("PUT", `/api/profile/resumes/${encodeURIComponent(key)}`, { copyFrom, label: key.replace(/[-_.]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) }); state.profile = await api("GET", "/api/profile"); const md = await api("GET", `/api/profile/resume?key=${encodeURIComponent(r.key)}`); state.baseEdit = { key: r.key, markdown: md.markdown }; });
     });
     if (!state.guard) api("GET", "/api/guard").then((g) => { state.guard = g; if (state.sel === "settings") render(true); });
+    if (!state.extensions) api("GET", "/api/extensions").then((x) => { state.extensions = x; if (state.sel === "settings") render(true); }).catch(() => { state.extensions = { dir: "extensions", extensions: [], errors: [] }; });
     if (state.guard) {
       $("#guardOn") && ($("#guardOn").onchange = () => run(null, async () => { const r = await api("PUT", "/api/guard", { enabled: $("#guardOn").checked }); state.guard = { ...state.guard, ...r }; }));
       document.querySelectorAll("[data-guard-provider]").forEach((b) => b.onclick = () => run(null, async () => {
