@@ -1,6 +1,6 @@
 /**
  * Job feed: pulls postings from public job-board APIs (company boards on
- * Greenhouse / Lever / Ashby / Workable / SmartRecruiters, plus the Arbeitnow,
+ * Greenhouse / Lever / Ashby / Workable / SmartRecruiters / Recruitee, plus the Arbeitnow,
  * RemoteOK and Remotive aggregators), filters them by your keywords and
  * locations, and triages each new one with a quick fit score so only the
  * promising ones surface. Nothing here scrapes HTML — every source in this file
@@ -49,7 +49,7 @@ export const AGGREGATORS = {
 export type Aggregator = keyof typeof AGGREGATORS;
 /** Built-in aggregators plus any aggregator-style extensions, as id → label. */
 export const aggregatorList = (): Record<string, string> => ({ ...AGGREGATORS, ...aggregatorExtensions() });
-export const BUILTIN_BOARDS = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters"] as const;
+export const BUILTIN_BOARDS = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee"] as const;
 /** Board providers that `provider:token` accepts — built-ins plus board extensions. */
 export const boardProviders = () => [...BUILTIN_BOARDS, ...boardExtensionIds()];
 export const isBoardId = (b: string) => new RegExp(`^(${boardProviders().join("|")}):[\\w.-]+$`, "i").test(b);
@@ -58,7 +58,7 @@ export interface FeedSettings {
   matchIn: "title" | "text"; // where keywords must appear
   locations: string[];       // any of these in the location; "remote" matches remote roles; empty = anywhere
   exclude: string[];         // title or location containing any of these is skipped
-  boards: string[];          // "greenhouse:stripe", "lever:spotify", "ashby:ramp", "workable:acme", "smartrecruiters:Acme", "<extension>:token"
+  boards: string[];          // "greenhouse:stripe", "lever:spotify", "ashby:ramp", "workable:acme", "smartrecruiters:Acme", "recruitee:acme", "<extension>:token"
   aggregators: Record<string, boolean>;   // built-in ids, plus aggregator-extension ids
   adzuna: { appId: string; appKey: string };
   levels: Level[];           // career levels to keep (empty = all)
@@ -187,6 +187,7 @@ export async function discoverBoard(input: string): Promise<{ board: string; via
       [/jobs\.ashbyhq\.com\/([\w-]+)/i, "ashby"], [/api\.ashbyhq\.com\/posting-api\/job-board\/([\w-]+)/i, "ashby"],
       [/apply\.workable\.com\/(?:api\/v\d\/widget\/accounts\/)?([\w-]+)/i, "workable"], [/([\w-]+)\.workable\.com/i, "workable"],
       [/jobs\.smartrecruiters\.com\/([\w-]+)/i, "smartrecruiters"], [/careers\.smartrecruiters\.com\/([\w-]+)/i, "smartrecruiters"],
+      [/([\w-]+)\.recruitee\.com/i, "recruitee"],
     ] as const;
     for (const [re, provider] of m) { const x = re.exec(u); if (x && !["www", "api", "jobs", "careers"].includes(x[1].toLowerCase())) return `${provider}:${x[1]}`; }
     return matchExtensionBoard(u); // board extensions get a say before we give up on the URL
@@ -245,6 +246,10 @@ export async function fetchBoard(board: string): Promise<Posting[]> {
     case "smartrecruiters": {
       const d = await getJson(`https://api.smartrecruiters.com/v1/companies/${token}/postings?limit=100`);
       return (d.content ?? []).map((j: any) => ({ source: board, external_id: String(j.id), company: j.company?.name || token, title: j.name, location: [j.location?.city, j.location?.region, j.location?.country].filter(Boolean).join(", "), remote: Boolean(j.location?.remote), salary: "", url: `https://jobs.smartrecruiters.com/${token}/${j.id}`, description: "", posted_at: iso(j.releasedDate) }));
+    }
+    case "recruitee": {
+      const d = await getJson(`https://${token}.recruitee.com/api/offers/`);
+      return (d.offers ?? []).map((j: any) => ({ source: board, external_id: String(j.id), company: j.company_name || token, title: j.title, location: j.location ?? "", remote: Boolean(j.remote), salary: "", url: j.careers_url || j.careers_apply_url, description: text(j.description) + (j.requirements ? `\n\nRequirements\n${text(j.requirements)}` : ""), posted_at: iso(j.published_at || j.created_at) }));
     }
     default: {
       // Not built in — an extension may provide it.
