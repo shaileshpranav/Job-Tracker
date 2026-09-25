@@ -21,6 +21,17 @@ ignored, as is everything in subdirectories — so `examples/` below is inert un
 
 Set `EXTENSIONS_DIR` in `.env` to keep them somewhere else.
 
+## Pausing, removing, pulling on demand
+
+From **Settings → Extensions** each installed extension gets:
+- **Pause / Resume** — stops it being used for refreshes, board discovery and capture without
+  touching its file or its saved board tokens/feed settings. Reversible, no restart needed.
+- **Remove** — deletes the file from this directory and drops it from the registry immediately
+  (no restart needed). This is not reversible; reinstall by dropping the file back in.
+- **Pull now** (boards and aggregators) — refreshes the feed using only that extension's
+  source(s), ignoring everything else configured. Doesn't count as a full feed refresh (it
+  doesn't reset the auto-refresh timer or the "last refreshed" time shown elsewhere).
+
 ## The contract
 
 ```ts
@@ -94,9 +105,26 @@ the server down with it.
 
 ## Please don't
 
-- Bypass a CAPTCHA, a login wall or a bot check. The app has a deliberate, documented answer for
-  those (it parks the task and asks you to open the page yourself) — see "When a site asks for a
-  human" in the main README.
+- Automate *solving* a CAPTCHA, a login wall or a bot check — no solving services, no fingerprint
+  spoofing or stealth tooling built to trick the check into thinking it isn't automation. The app's
+  default answer for these is deliberate and documented: park the task and ask you to clear it
+  yourself in your own browser — see "When a site asks for a human" in the main README.
+
+  Driving a **real, persistent browser profile you log into by hand** (Playwright or similar) is a
+  different thing and is fine: you're still the one clearing the check and, if there is one, signing
+  in — the extension just reuses the session you established instead of asking you to hand over page
+  text every single time, which doesn't scale to a search source that needs many requests per
+  refresh. A `jobstreet-sg.ts` extension using this pattern (not bundled — it's one person's, kept
+  local like any installed extension) has a matching `_jobstreet-sg-login.ts` next to it: a small
+  script, prefixed with `_` so the loader ignores it as an extension of its own, that opens a real
+  window for you to clear Cloudflare (and sign in, if you want) once — `node
+  --env-file-if-exists=.env extensions/_your-login-script.ts`. The extension reuses that saved
+  profile headlessly afterwards, and should report a clear "run the login script again" error
+  instead of quietly hanging if the session goes stale. This pulls in `playwright` (an optional
+  dependency — `npm install` still works without it) and a real browser binary, so reach for it
+  only when a source genuinely can't be read with plain requests; it's much heavier than
+  `ctx.fetchJson`/`fetchText`.
+
 - Ignore a site's `robots.txt`. Check it before you write the connector; if the endpoint you want is
   disallowed, that's the site telling you no.
 - Hammer anything. One refresh should be a handful of requests, not hundreds.

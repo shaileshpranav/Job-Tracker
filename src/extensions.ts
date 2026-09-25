@@ -12,10 +12,21 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { ROOT } from "./db.ts";
+import { db, ROOT } from "./db.ts";
 import { htmlToText, jobPostingFromJsonLd } from "./scrape.ts";
 
 export const EXT_DIR = process.env.EXTENSIONS_DIR ? path.resolve(process.env.EXTENSIONS_DIR) : path.join(ROOT, "extensions");
+
+// ---------- paused extensions (persisted; a pause survives a restart) ----------
+
+db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+const DISABLED_KEY = "extensions:disabled";
+function loadDisabled(): Set<string> {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(DISABLED_KEY) as { value: string } | undefined;
+  try { return new Set(row ? JSON.parse(row.value) : []); } catch { return new Set(); }
+}
+function saveDisabled() { db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(DISABLED_KEY, JSON.stringify([...disabled])); }
+const disabled = loadDisabled();
 
 /** What an extension gets handed: fetch helpers, parsing helpers, and the user's feed settings. */
 export interface ExtensionContext {
@@ -106,7 +117,7 @@ function validate(mod: any, file: string): Extension {
   return { ...e, file: path.basename(file) } as LoadedExtension;
 }
 
-/** Load every extension file. Called once at startup; a broken file is reported, never fatal. */
+/** Load every extension file. Called at startup, and again after installing/removing one; a broken file is reported, never fatal. */
 async function load() {
   loaded.length = 0; failures.length = 0;
   let files: string[] = [];
@@ -124,24 +135,49 @@ async function load() {
       console.error(`[extension] ${f}: ${e?.message ?? e}`);
     }
   }
+  // Ids that are no longer installed have nothing left to pause — drop them so the set doesn't grow forever.
+  let pruned = false;
+  for (const id of [...disabled]) if (!loaded.some((e) => e.id === id)) { disabled.delete(id); pruned = true; }
+  if (pruned) saveDisabled();
   if (loaded.length) console.log(`Extensions loaded: ${loaded.map((e) => e.id).join(", ")}`);
 }
 await load(); // top-level: anything importing this module gets a populated registry
 
 // ---------- registry ----------
 
-export const extensions = () => loaded as readonly LoadedExtension[];
+const findLoaded = (id: string) => loaded.find((e) => e.id === id.toLowerCase()) ?? null;
+/** Is this id a loaded extension at all (enabled or paused)? Lets callers tell "unknown" from "paused". */
+export const isExtensionInstalled = (id: string) => !!findLoaded(id);
+/** Paused extensions stay installed (config, files on disk) but are skipped for fetching, capture and discovery. */
+export const isExtensionEnabled = (id: string) => !disabled.has(id.toLowerCase());
+export function setExtensionEnabled(id: string, enabled: boolean) {
+  const ext = findLoaded(id);
+  if (!ext) throw new Error(`No extension "${id}" is loaded`);
+  if (enabled) disabled.delete(ext.id); else disabled.add(ext.id);
+  saveDisabled();
+}
+/** Delete the extension's file and drop it from the registry. Irreversible — the file is gone, not just unlisted. */
+export async function removeExtension(id: string) {
+  const ext = findLoaded(id);
+  if (!ext) throw new Error(`No extension "${id}" is loaded`);
+  fs.unlinkSync(path.join(EXT_DIR, ext.file));
+  disabled.delete(ext.id);
+  saveDisabled();
+  await load();
+}
+export const extensions = () => loaded.map((e) => ({ ...e, enabled: isExtensionEnabled(e.id) }));
 export const extensionErrors = () => failures as readonly { file: string; error: string }[];
-export const getExtension = (id: string) => loaded.find((e) => e.id === id.toLowerCase()) ?? null;
-/** Ids usable as a board provider — for the `provider:token` validation in feed/server. */
+/** Loaded *and* enabled — what fetching, capture and discovery are allowed to use. */
+export const getExtension = (id: string) => { const e = findLoaded(id); return e && isExtensionEnabled(e.id) ? e : null; };
+/** Ids usable as a board provider — for the `provider:token` validation in feed/server. Includes paused ones so a pause doesn't strip saved config. */
 export const boardExtensionIds = () => loaded.filter((e) => e.kind === "board").map((e) => e.id);
-/** Aggregator-style extensions, as id → label, to merge into the feed's source list. */
+/** Aggregator-style extensions, as id → label, to merge into the feed's source list. Includes paused ones; feed_refresh filters those out at fetch time. */
 export const aggregatorExtensions = (): Record<string, string> => Object.fromEntries(loaded.filter((e) => e.kind === "aggregator").map((e) => [e.id, `${e.label} (extension)`]));
 
-/** A careers URL an extension recognises → its board id, or null. */
+/** A careers URL an extension recognises → its board id, or null. Paused extensions don't get a vote. */
 export function matchExtensionBoard(url: string): string | null {
   for (const e of loaded) {
-    if (e.kind !== "board" || typeof e.match !== "function") continue;
+    if (e.kind !== "board" || typeof e.match !== "function" || !isExtensionEnabled(e.id)) continue;
     try { const token = e.match(url); if (token) return `${e.id}:${token}`; } catch { /* a bad matcher shouldn't break discovery */ }
   }
   return null;
@@ -153,7 +189,7 @@ const MAX_POSTINGS = 2000;
 /** Run an extension's fetch and normalise what it returns into feed postings. */
 export async function fetchExtension(id: string, token: string, ctx: ExtensionContext): Promise<any[]> {
   const ext = getExtension(id);
-  if (!ext?.fetch) throw new Error(`No extension "${id}" with a fetch handler is loaded`);
+  if (!ext?.fetch) throw new Error(findLoaded(id) ? `Extension "${id}" is paused — enable it in Settings → Extensions` : `No extension "${id}" with a fetch handler is loaded`);
   const source = ext.kind === "board" ? `${ext.id}:${token}` : ext.id;
   const out = await Promise.race([
     ext.fetch(token, ctx),
@@ -179,7 +215,7 @@ function toPosting(p: ExtPosting, source: string, ext: Extension) {
 /** Let an extension handle a posting URL. Returns page text, or null if none claims it. */
 export async function captureViaExtension(url: string, ctx: ExtensionContext): Promise<{ text: string; id: string } | null> {
   for (const e of loaded) {
-    if (!e.capture) continue;
+    if (!e.capture || !isExtensionEnabled(e.id)) continue;
     let claims = false;
     try { claims = Boolean(e.capture.matches(url)); } catch { continue; }
     if (!claims) continue;
