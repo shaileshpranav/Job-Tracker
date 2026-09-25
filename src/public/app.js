@@ -48,7 +48,7 @@ const ICONS = {
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
 
-const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: false, baseEdit: null, guard: null, extensions: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null, settingsSection: "model", newMode: "capture", viewDoc: null, headOpen: false, statusOpen: false, feedCursor: -1, noticeAction: null, pendingDeletes: new Set() };
+const state = { apps: [], filter: "all", sel: null, app: null, tab: "job", busy: null, profile: null, err: null, settings: null, modelCache: {}, editJob: false, docMode: "preview", tex: null, prompts: null, templates: null, style: null, jobs: [], notice: null, search: "", pasteFor: null, goals: null, celebrate: false, diffAgainst: "base", baseResume: null, feed: null, feedFilter: "hot", feedFacets: { q: "", loc: "", sources: [], levels: [], remoteOnly: false }, feedTest: null, sort: "recent", activity: null, checklistHidden: false, ats: null, atsOpen: false, baseEdit: null, guard: null, extensions: null, applyOpen: false, genNote: {}, drafts: {}, dup: null, pdf: null, settingsSection: "model", newMode: "capture", viewDoc: null, headOpen: false, statusOpen: false, feedCursor: -1, noticeAction: null, pendingDeletes: new Set() };
 try { state.atsOpen = localStorage.getItem("atsOpen") === "1"; } catch { state.atsOpen = false; }
 try { state.settingsSection = localStorage.getItem("settingsSection") || "model"; } catch {}
 
@@ -334,6 +334,18 @@ function renderFeed() {
   let items = f.items;
   if (state.feedFilter === "hot") items = items.filter((i) => i.status === "new" && i.fit_score >= st.minScore);
   if (state.feedFilter === "unscored") items = items.filter((i) => i.fit_score == null);
+  // Filters on what's currently shown (portal, location, career level, remote, search) — display-only,
+  // separate from the feed settings that decide what gets pulled and kept in the first place.
+  const fac = state.feedFacets;
+  const tabItems = items; // before facet filters, so the facet option lists reflect this tab, not the narrowed result
+  const sourceOptions = [...new Set(tabItems.map((i) => i.source))].sort();
+  const levelOptions = (f.levels || []).filter((l) => tabItems.some((i) => i.level === l.key));
+  if (fac.q.trim()) { const q = fac.q.trim().toLowerCase(); items = items.filter((i) => `${i.title_en || i.title} ${i.company}`.toLowerCase().includes(q)); }
+  if (fac.loc.trim()) { const l = fac.loc.trim().toLowerCase(); items = items.filter((i) => (i.location || "").toLowerCase().includes(l) || (l === "remote" && i.remote)); }
+  if (fac.sources.length) items = items.filter((i) => fac.sources.includes(i.source));
+  if (fac.levels.length) items = items.filter((i) => fac.levels.includes(i.level));
+  if (fac.remoteOnly) items = items.filter((i) => i.remote);
+  const facetsActive = fac.q.trim() || fac.loc.trim() || fac.sources.length || fac.levels.length || fac.remoteOnly;
   const configured = st.boards.length || Object.values(st.aggregators).some(Boolean);
   const chips = [["hot", `${icon("flame")} Hot ${c.hot}${c.unseen_hot ? ` <span class="tb">${c.unseen_hot} new</span>` : ""}`], ["open", `All open ${c.open}`], ["unscored", `Unscored ${c.unscored}`], ["tracked", "Tracked"], ["dismissed", "Dismissed"], ...(c.hidden ? [["hidden", `Hidden by filters ${c.hidden}`]] : [])];
   const dots = (n) => n == null ? '<span class="muted" title="Not scored yet">–</span>' : `<span class="dots small">${[1,2,3,4,5].map((i) => `<span class="dot ${i <= n ? "on f" + n : ""}"></span>`).join("")}</span>`;
@@ -354,6 +366,14 @@ function renderFeed() {
       ${state.feedFilter === "hot" && items.length ? `<button class="ghost" data-bulk="track_hot" title="Create applications for every hot posting (up to 20)">${icon("plus")} Track all hot</button>` : ""}
       ${state.feedFilter === "open" || state.feedFilter === "unscored" ? `<button class="ghost" data-bulk="dismiss_low" title="Dismiss everything scored below the hot threshold">× Dismiss below ${st.minScore}</button>${c.screened_out ? `<button class="ghost" data-bulk="dismiss_screened" title="Dismiss unscored postings with keyword coverage below ${st.minAts}%">× Dismiss screened-out (${c.screened_out})</button>` : ""}` : ""}
     </div>
+    <div class="toolbar" style="margin-bottom:12px;flex-wrap:wrap;row-gap:8px">
+      <input id="feedSearch" placeholder="Search title or company…" value="${esc(fac.q)}" style="width:190px">
+      <input id="feedLocFilter" placeholder="Filter by location…" value="${esc(fac.loc)}" style="width:160px">
+      <label style="display:inline-flex;align-items:center;gap:5px;margin:0"><input type="checkbox" id="feedRemoteOnly" style="width:auto" ${fac.remoteOnly ? "checked" : ""}>Remote only</label>
+      ${sourceOptions.length > 1 ? `<div class="filters" style="border:0;padding:0" title="Portal">${sourceOptions.map((s) => `<button data-feed-src="${esc(s)}" class="${fac.sources.includes(s) ? "on" : ""}">${esc(s)}</button>`).join("")}</div>` : ""}
+      ${levelOptions.length > 1 ? `<div class="filters" style="border:0;padding:0" title="Career level">${levelOptions.map((l) => `<button data-feed-lvl="${esc(l.key)}" class="${fac.levels.includes(l.key) ? "on" : ""}">${esc(l.label)}</button>`).join("")}</div>` : ""}
+      ${facetsActive ? `<button class="ghost" id="feedFacetClear">× Clear filters</button>` : ""}
+    </div>
     ${items.length ? items.map((i, idx) => `<div class="feed-item ${i.fit_score >= st.minScore ? "hot" : ""} ${!i.seen && i.status === "new" ? "unseen" : ""} ${idx === state.feedCursor ? "cur" : ""}" data-feed-idx="${idx}" data-feed-id="${i.id}">
       <div class="feed-score">${dots(i.fit_score)}${i.fit_score != null ? `<b>${i.fit_score}</b>` : ""}</div>
       <div class="feed-main">
@@ -370,7 +390,7 @@ function renderFeed() {
         ${i.fit_score == null && i.status === "new" ? `<button class="ghost" data-feed-score1="${i.id}" title="Score this one with the model">★</button>` : ""}
         ${i.status === "dismissed" ? `<button class="ghost" data-feed-restore="${i.id}">Restore</button><button class="ghost" data-feed-delete="${i.id}" title="Delete permanently">Delete</button>` : i.status === "hidden" ? `<button class="ghost" data-feed-delete="${i.id}" title="Delete permanently">Delete</button>` : `<button class="ghost" data-feed-dismiss="${i.id}" title="Remove from the feed (find it again under Dismissed)">× Remove</button>`}
       </div>
-    </div>`).join("") : `<div class="card muted">${state.feedFilter === "hot" ? `Nothing scored ${st.minScore}+ yet. ${c.unscored ? "Score the unscored postings, or" : "Refresh the feed, or"} lower the threshold below.` : "Nothing here."}</div>`}
+    </div>`).join("") : `<div class="card muted">${facetsActive ? `Nothing matches these filters.` : state.feedFilter === "hot" ? `Nothing scored ${st.minScore}+ yet. ${c.unscored ? "Score the unscored postings, or" : "Refresh the feed, or"} lower the threshold below.` : "Nothing here."}</div>`}
     ${state.feedFilter === "dismissed" && items.length ? `<div class="toolbar"><button class="ghost" id="feedPurge">Delete all dismissed</button></div>` : ""}
 
     <div class="card"><details ${configured ? "" : "open"}><summary style="cursor:pointer;font-weight:600">Feed settings</summary>
@@ -700,10 +720,13 @@ function renderSettings() {
       </details>`).join("") : '<p class="muted">Loading…</p>'}
     </div>`,
     extensions: () => `<div class="card"><h2>Extensions</h2>
-      <p class="muted">Connectors for boards the built-in sources don't cover. The bundled sources stick to official JSON endpoints; extensions are where anything else goes — an internal API, a site that needs HTML parsing, a private board. They run <b>in the server process</b> with the same access the app has, so only install ones you've read. Drop a <code>.ts</code> file into <code>${esc(state.extensions?.dir || "extensions")}/</code> and restart; see that folder's <code>README.md</code> for the contract and examples.</p>
+      <p class="muted">Connectors for boards the built-in sources don't cover. The bundled sources stick to official JSON endpoints; extensions are where anything else goes — an internal API, a site that needs HTML parsing, a private board. They run <b>in the server process</b> with the same access the app has, so only install ones you've read. Drop a <code>.ts</code> file into <code>${esc(state.extensions?.dir || "extensions")}/</code> and restart to install; see that folder's <code>README.md</code> for the contract and examples.</p>
       ${!state.extensions ? '<p class="muted"><span class="spinner"></span>Loading…</p>' : `
-        ${state.extensions.extensions.length ? state.extensions.extensions.map((e) => `<div class="base-row">
-          <div class="sp"><b>${esc(e.label)}</b> <span class="muted">· <code>${esc(e.id)}</code>${e.kind ? ` · ${e.kind === "board" ? `company board — add as <code>${esc(e.id)}:&lt;token&gt;</code>` : "aggregator — enable it in the feed settings"}` : ""}${e.capture ? " · handles capture" : ""} · <code>${esc(e.file)}</code></span></div>
+        ${state.extensions.extensions.length ? state.extensions.extensions.map((e) => `<div class="base-row" data-ext-id="${esc(e.id)}">
+          <div class="sp"><b>${esc(e.label)}</b> ${e.enabled ? "" : '<span class="pill warn">paused</span>'} <span class="muted">· <code>${esc(e.id)}</code>${e.kind ? ` · ${e.kind === "board" ? `company board — add as <code>${esc(e.id)}:&lt;token&gt;</code>` : "aggregator — enable it in the feed settings"}` : ""}${e.capture ? " · handles capture" : ""} · <code>${esc(e.file)}</code></span></div>
+          ${e.kind && e.enabled ? `<button class="ghost" data-ext-pull="${esc(e.id)}" title="Refresh the feed using only this extension">Pull now</button>` : ""}
+          <button class="ghost" data-ext-toggle="${esc(e.id)}" data-ext-enable="${e.enabled ? "0" : "1"}">${e.enabled ? "Pause" : "Resume"}</button>
+          <button class="ghost" data-ext-remove="${esc(e.id)}" title="Delete the file — irreversible">Remove</button>
         </div>`).join("") : '<p class="muted">None installed.</p>'}
         ${state.extensions.errors.length ? `<div class="banner" style="margin-top:10px">${icon("warn")} ${state.extensions.errors.length} file${state.extensions.errors.length === 1 ? "" : "s"} failed to load:${state.extensions.errors.map((x) => `<div style="margin-top:4px"><code>${esc(x.file)}</code> — ${esc(x.error)}</div>`).join("")}</div>` : ""}`}
     </div>`,
@@ -1234,6 +1257,12 @@ function bind() {
     });
     if (!state.guard) api("GET", "/api/guard").then((g) => { state.guard = g; if (state.sel === "settings") render(true); });
     if (!state.extensions) api("GET", "/api/extensions").then((x) => { state.extensions = x; if (state.sel === "settings") render(true); }).catch(() => { state.extensions = { dir: "extensions", extensions: [], errors: [] }; });
+    document.querySelectorAll("[data-ext-toggle]").forEach((b) => b.onclick = () => run(null, async () => { state.extensions = await api("POST", `/api/extensions/${encodeURIComponent(b.dataset.extToggle)}/enabled`, { enabled: b.dataset.extEnable === "1" }); }));
+    document.querySelectorAll("[data-ext-remove]").forEach((b) => b.onclick = () => {
+      if (!confirm(`Remove this extension? This deletes its file from ${state.extensions?.dir || "extensions"}/ — you'd need to reinstall it to bring it back.`)) return;
+      run("Removing extension…", async () => { state.extensions = await api("DELETE", `/api/extensions/${encodeURIComponent(b.dataset.extRemove)}`); });
+    });
+    document.querySelectorAll("[data-ext-pull]").forEach((b) => b.onclick = () => enqueue(`/api/extensions/${encodeURIComponent(b.dataset.extPull)}/pull`, {}));
     if (state.guard) {
       $("#guardOn") && ($("#guardOn").onchange = () => run(null, async () => { const r = await api("PUT", "/api/guard", { enabled: $("#guardOn").checked }); state.guard = { ...state.guard, ...r }; }));
       document.querySelectorAll("[data-guard-provider]").forEach((b) => b.onclick = () => run(null, async () => {
@@ -1274,6 +1303,20 @@ function bind() {
   document.querySelectorAll("[data-open-app]").forEach((b) => b.onclick = () => open(Number(b.dataset.openApp)));
   if (state.sel === "feed") {
     document.querySelectorAll("[data-feed-filter]").forEach((b) => b.onclick = () => { state.feedFilter = b.dataset.feedFilter; loadFeed().then(() => render(true)); });
+    $("#feedSearch") && ($("#feedSearch").oninput = () => { state.feedFacets.q = $("#feedSearch").value; render(true); });
+    $("#feedLocFilter") && ($("#feedLocFilter").oninput = () => { state.feedFacets.loc = $("#feedLocFilter").value; render(true); });
+    $("#feedRemoteOnly") && ($("#feedRemoteOnly").onchange = () => { state.feedFacets.remoteOnly = $("#feedRemoteOnly").checked; render(true); });
+    document.querySelectorAll("[data-feed-src]").forEach((b) => b.onclick = () => {
+      const v = b.dataset.feedSrc, s = state.feedFacets.sources;
+      state.feedFacets.sources = s.includes(v) ? s.filter((x) => x !== v) : [...s, v];
+      render(true);
+    });
+    document.querySelectorAll("[data-feed-lvl]").forEach((b) => b.onclick = () => {
+      const v = b.dataset.feedLvl, s = state.feedFacets.levels;
+      state.feedFacets.levels = s.includes(v) ? s.filter((x) => x !== v) : [...s, v];
+      render(true);
+    });
+    $("#feedFacetClear") && ($("#feedFacetClear").onclick = () => { state.feedFacets = { q: "", loc: "", sources: [], levels: [], remoteOnly: false }; render(true); });
     $("#feedRefresh") && ($("#feedRefresh").onclick = () => enqueue("/api/feed/refresh", {}));
     $("#feedScore") && ($("#feedScore").onclick = () => enqueue("/api/feed/score", {}));
     document.querySelectorAll("[data-feed-score1]").forEach((b) => b.onclick = () => enqueue("/api/feed/score", { ids: [Number(b.dataset.feedScore1)] }));

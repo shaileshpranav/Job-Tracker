@@ -27,6 +27,9 @@
     "pdf-parse": "^2.4.5",
     "zod": "^4.6.1"
   },
+  "optionalDependencies": {
+    "playwright": "^1.63.0"
+  },
   "devDependencies": {
     "@types/node": "^22.20.2",
     "typescript": "^7.0.2"

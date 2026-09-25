@@ -10,7 +10,7 @@
  */
 import { db } from "./db.ts";
 import { htmlToText } from "./scrape.ts";
-import { aggregatorExtensions, boardExtensionIds, extensionContext, fetchExtension, getExtension, matchExtensionBoard } from "./extensions.ts";
+import { aggregatorExtensions, boardExtensionIds, extensionContext, fetchExtension, getExtension, isExtensionEnabled, isExtensionInstalled, matchExtensionBoard } from "./extensions.ts";
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS feed_items (
@@ -249,7 +249,10 @@ export async function fetchBoard(board: string): Promise<Posting[]> {
     default: {
       // Not built in — an extension may provide it.
       const ext = getExtension(provider);
-      if (!ext?.fetch || ext.kind !== "board") throw new Error(`Unknown board provider "${provider}"`);
+      if (!ext?.fetch || ext.kind !== "board") {
+        if (isExtensionInstalled(provider) && !isExtensionEnabled(provider)) throw new Error(`Extension "${provider}" is paused — enable it in Settings → Extensions`);
+        throw new Error(`Unknown board provider "${provider}"`);
+      }
       const s = feedSettings();
       return fetchExtension(provider, token, extensionContext(() => {}, s)) as Promise<Posting[]>;
     }
@@ -340,6 +343,7 @@ export async function fetchAggregator(name: string, keywords: string[], opts: { 
   }
   const ext = getExtension(name);
   if (ext?.fetch && ext.kind === "aggregator") return fetchExtension(name, "", extensionContext(() => {}, { keywords, locations: opts.locations })) as Promise<Posting[]>;
+  if (isExtensionInstalled(name) && !isExtensionEnabled(name)) throw new Error(`Extension "${name}" is paused — enable it in Settings → Extensions`);
   throw new Error(`Unknown aggregator "${name}"`);
 }
 
@@ -464,7 +468,7 @@ export function markSeen(ids: number[]) {
 }
 
 export function listFeed(status: string | null = null) {
-  const where = status ? "WHERE status = ?" : "WHERE status NOT IN ('dismissed', 'hidden')";
+  const where = status ? "WHERE status = ?" : "WHERE status NOT IN ('dismissed', 'hidden', 'tracked', 'deleted')";
   return db.prepare(`SELECT id, source, company, title, title_en, lang, level, location, remote, salary, url, posted_at, fit_score, fit_reason, ats_pct, ats_missing, seen, status, application_id, created_at, length(description) AS desc_len, substr(description, 1, 700) AS excerpt FROM feed_items ${where} ORDER BY (fit_score IS NULL), fit_score DESC, ats_pct DESC, posted_at DESC, id DESC LIMIT 500`).all(...(status ? [status] : []));
 }
 export const getFeedItem = (id: number) => db.prepare("SELECT * FROM feed_items WHERE id = ?").get(id) as any;
