@@ -69,6 +69,9 @@ if (!dcols.has("original")) db.exec("ALTER TABLE documents ADD COLUMN original T
 if (!dcols.has("instructions")) db.exec("ALTER TABLE documents ADD COLUMN instructions TEXT"); // what the user asked for when this version was drafted
 
 export const STATUSES = ["saved", "applied", "screening", "interview", "offer", "rejected", "withdrawn"] as const;
+/** Statuses where the application is over and nothing is expected of you: nothing is ever "due" on one. */
+export const CLOSED_STATUSES = ["rejected", "withdrawn"] as const;
+export const isClosed = (status: string) => (CLOSED_STATUSES as readonly string[]).includes(status);
 export type Status = (typeof STATUSES)[number];
 
 export interface Application {
