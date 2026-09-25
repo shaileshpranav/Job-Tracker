@@ -2,7 +2,7 @@ import http from "node:http";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { db, getApp, logEvent, touch, saveDocument, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
+import { db, getApp, logEvent, touch, saveDocument, isClosed, APPS_DIR, PROFILE_DIR, ROOT, STATUSES, type Application } from "./db.ts";
 import { resumeSize, ONE_PAGE } from "./ai.ts";
 import { renderTex, contentHash, readTemplate, writeTemplate } from "./latex.ts";
 import { listPrompts, savePrompt } from "./prompts.ts";
@@ -277,10 +277,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
     const ageDays = (d: string) => Math.floor((Date.parse(t) - Date.parse(d)) / 86_400_000);
     for (const a of rows) {
       // Due when a next action is dated today/earlier, or when an application has sat in
-      // applied/screening for `followupDays` since the last touch without a reply.
+      // applied/screening for `followupDays` since the last touch without a reply. A closed
+      // application (rejected/withdrawn) is never due, whatever next action was left on it.
       const last = [a.applied_at, a.followed_up_at].filter(Boolean).sort().pop();
       const stale = ["applied", "screening"].includes(a.status) && last && days > 0 && ageDays(last) >= days;
-      a.due = a.next_action_at && a.next_action_at <= t ? "action" : stale ? "followup" : null;
+      const action = !!a.next_action_at && a.next_action_at <= t;
+      a.due = isClosed(a.status) ? null : action ? "action" : stale ? "followup" : null;
       a.days_since = last ? ageDays(last) : null;
     }
     return send(res, 200, rows);

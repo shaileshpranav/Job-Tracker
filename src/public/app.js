@@ -1,4 +1,7 @@
 const STATUSES = ["saved", "applied", "screening", "interview", "offer", "rejected", "withdrawn"];
+// Over and done with: nothing is ever due on these (mirrors CLOSED_STATUSES in db.ts).
+const CLOSED_STATUSES = ["rejected", "withdrawn"];
+const isClosed = (status) => CLOSED_STATUSES.includes(status);
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -902,7 +905,7 @@ function renderDetail(a) {
         <button id="delBtn" class="ghost icon" title="Delete application">${icon("trash")}</button>
       </div>
       ${(() => {
-        const phone = isPhone(), due = !!a.next_action_at && a.next_action_at <= localDate();
+        const phone = isPhone(), due = !!a.next_action_at && a.next_action_at <= localDate() && !isClosed(a.status);
         // On a phone the seven status pills and the date controls are folded behind one line each.
         const statusRow = phone && !state.statusOpen
           ? `<button class="status-cur ${a.status}" id="statusOpen" title="Change status">${a.status} ▾</button>`
