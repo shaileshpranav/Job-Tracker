@@ -3,11 +3,14 @@
  * Greenhouse / Lever / Ashby / Workable / SmartRecruiters, plus the Arbeitnow,
  * RemoteOK and Remotive aggregators), filters them by your keywords and
  * locations, and triages each new one with a quick fit score so only the
- * promising ones surface. Nothing here scrapes HTML — every source is an
- * official JSON endpoint.
+ * promising ones surface. Nothing here scrapes HTML — every source in this file
+ * is an official JSON endpoint. Anything that can't meet that bar goes in a
+ * user-installed extension instead (extensions.ts), which this file falls
+ * through to for board providers and aggregator ids it doesn't recognise.
  */
 import { db } from "./db.ts";
 import { htmlToText } from "./scrape.ts";
+import { aggregatorExtensions, boardExtensionIds, extensionContext, fetchExtension, getExtension, isExtensionEnabled, isExtensionInstalled, matchExtensionBoard } from "./extensions.ts";
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS feed_items (
@@ -44,13 +47,19 @@ export const AGGREGATORS = {
   arbeitnow: "Arbeitnow (Europe)", remoteok: "RemoteOK", remotive: "Remotive", hn: "HN “Who is hiring”", muse: "The Muse", himalayas: "Himalayas (remote)", jobicy: "Jobicy (remote)", adzuna: "Adzuna (needs a free key)",
 } as const;
 export type Aggregator = keyof typeof AGGREGATORS;
+/** Built-in aggregators plus any aggregator-style extensions, as id → label. */
+export const aggregatorList = (): Record<string, string> => ({ ...AGGREGATORS, ...aggregatorExtensions() });
+export const BUILTIN_BOARDS = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters"] as const;
+/** Board providers that `provider:token` accepts — built-ins plus board extensions. */
+export const boardProviders = () => [...BUILTIN_BOARDS, ...boardExtensionIds()];
+export const isBoardId = (b: string) => new RegExp(`^(${boardProviders().join("|")}):[\\w.-]+$`, "i").test(b);
 export interface FeedSettings {
   keywords: string[];        // any of these phrases (all words of a phrase) in the title (or description, see matchIn)
   matchIn: "title" | "text"; // where keywords must appear
   locations: string[];       // any of these in the location; "remote" matches remote roles; empty = anywhere
   exclude: string[];         // title or location containing any of these is skipped
-  boards: string[];          // "greenhouse:stripe", "lever:spotify", "ashby:ramp", "workable:acme", "smartrecruiters:Acme"
-  aggregators: Record<Aggregator, boolean>;
+  boards: string[];          // "greenhouse:stripe", "lever:spotify", "ashby:ramp", "workable:acme", "smartrecruiters:Acme", "<extension>:token"
+  aggregators: Record<string, boolean>;   // built-in ids, plus aggregator-extension ids
   adzuna: { appId: string; appKey: string };
   levels: Level[];           // career levels to keep (empty = all)
   autoTranslate: boolean;    // translate non-English titles for matching (and captured postings)
@@ -122,8 +131,11 @@ const list = (v: unknown) => (Array.isArray(v) ? v : String(v ?? "").split(/[\n,
 export function saveFeedSettings(input: Partial<Record<keyof FeedSettings, unknown>>): FeedSettings {
   const cur = feedSettings();
   const num = (v: unknown, d: number, max: number) => { const n = Math.floor(Number(v)); return Number.isFinite(n) && n >= 0 && n <= max ? n : d; };
-  const boards = input.boards !== undefined ? list(input.boards).map((b) => b.toLowerCase().replace(/\s+/g, "")).filter((b) => /^(greenhouse|lever|ashby|workable|smartrecruiters):[\w.-]+$/i.test(b)) : cur.boards;
-  const agg = (input.aggregators ?? {}) as Partial<Record<Aggregator, boolean>>;
+  const boards = input.boards !== undefined ? list(input.boards).map((b) => b.toLowerCase().replace(/\s+/g, "")).filter(isBoardId) : cur.boards;
+  const agg = (input.aggregators ?? {}) as Record<string, boolean>;
+  // Built-ins, loaded aggregator extensions, and anything already saved — so an extension's toggle
+  // survives while that extension is temporarily uninstalled.
+  const aggKeys = [...new Set([...Object.keys(aggregatorList()), ...Object.keys(cur.aggregators)])];
   const adz = (input.adzuna ?? {}) as Partial<FeedSettings["adzuna"]>;
   const next: FeedSettings = {
     keywords: input.keywords !== undefined ? list(input.keywords) : cur.keywords,
@@ -131,7 +143,7 @@ export function saveFeedSettings(input: Partial<Record<keyof FeedSettings, unkno
     locations: input.locations !== undefined ? list(input.locations) : cur.locations,
     exclude: input.exclude !== undefined ? list(input.exclude) : cur.exclude,
     boards,
-    aggregators: Object.fromEntries((Object.keys(AGGREGATORS) as Aggregator[]).map((k) => [k, agg[k] !== undefined ? Boolean(agg[k]) : cur.aggregators[k]])) as Record<Aggregator, boolean>,
+    aggregators: Object.fromEntries(aggKeys.map((k) => [k, agg[k] !== undefined ? Boolean(agg[k]) : Boolean(cur.aggregators[k])])),
     adzuna: { appId: adz.appId !== undefined ? String(adz.appId).trim() : cur.adzuna.appId, appKey: adz.appKey !== undefined ? String(adz.appKey).trim() : cur.adzuna.appKey },
     levels: input.levels !== undefined ? (Array.isArray(input.levels) ? input.levels : list(input.levels)).map(String).filter((l): l is Level => (LEVELS as readonly string[]).includes(l)) : cur.levels,
     autoTranslate: input.autoTranslate !== undefined ? Boolean(input.autoTranslate) : cur.autoTranslate,
@@ -177,10 +189,10 @@ export async function discoverBoard(input: string): Promise<{ board: string; via
       [/jobs\.smartrecruiters\.com\/([\w-]+)/i, "smartrecruiters"], [/careers\.smartrecruiters\.com\/([\w-]+)/i, "smartrecruiters"],
     ] as const;
     for (const [re, provider] of m) { const x = re.exec(u); if (x && !["www", "api", "jobs", "careers"].includes(x[1].toLowerCase())) return `${provider}:${x[1]}`; }
-    return null;
+    return matchExtensionBoard(u); // board extensions get a say before we give up on the URL
   };
   const text = input.trim();
-  if (/^(greenhouse|lever|ashby|workable|smartrecruiters):/i.test(text)) return { board: text.toLowerCase(), via: "id" };
+  if (new RegExp(`^(${boardProviders().join("|")}):`, "i").test(text)) return { board: text.toLowerCase(), via: "id" };
   const direct = fromUrl(text);
   if (direct) return { board: direct, via: "url" };
   if (!/^https?:\/\//i.test(text) && !/\./.test(text)) return null;
@@ -195,7 +207,7 @@ export async function discoverBoard(input: string): Promise<{ board: string; via
       const html = await res.text();
       const found = fromUrl(res.url) ?? fromUrl(html);
       if (found) return { board: found, via: u };
-      for (const p of ["greenhouse", "lever", "ashby", "workable", "smartrecruiters"]) if (new RegExp(p, "i").test(html) && !mentioned.includes(p)) mentioned.push(p);
+      for (const p of boardProviders()) if (new RegExp(p, "i").test(html) && !mentioned.includes(p)) mentioned.push(p);
     } catch { /* try the next */ }
   }
   // Last resort: JS-rendered careers pages hide the board. Try the company's domain name as the
@@ -203,7 +215,7 @@ export async function discoverBoard(input: string): Promise<{ board: string; via
   const host = (() => { try { return new URL(urls[0]).hostname.replace(/^www\./, ""); } catch { return ""; } })();
   const label = host.split(".").slice(0, -1).pop() ?? "";
   if (!label || label.length < 3) return null;
-  const order = [...mentioned, ...["greenhouse", "lever", "ashby", "workable", "smartrecruiters"].filter((p) => !mentioned.includes(p))];
+  const order = [...mentioned, ...boardProviders().filter((p) => !mentioned.includes(p))];
   for (const p of order) {
     try { const jobs = await fetchBoard(`${p}:${label}`); if (jobs.length) return { board: `${p}:${label}`, via: `guessed from ${host}` }; } catch { /* not this one */ }
   }
@@ -234,7 +246,16 @@ export async function fetchBoard(board: string): Promise<Posting[]> {
       const d = await getJson(`https://api.smartrecruiters.com/v1/companies/${token}/postings?limit=100`);
       return (d.content ?? []).map((j: any) => ({ source: board, external_id: String(j.id), company: j.company?.name || token, title: j.name, location: [j.location?.city, j.location?.region, j.location?.country].filter(Boolean).join(", "), remote: Boolean(j.location?.remote), salary: "", url: `https://jobs.smartrecruiters.com/${token}/${j.id}`, description: "", posted_at: iso(j.releasedDate) }));
     }
-    default: throw new Error(`Unknown board provider "${provider}"`);
+    default: {
+      // Not built in — an extension may provide it.
+      const ext = getExtension(provider);
+      if (!ext?.fetch || ext.kind !== "board") {
+        if (isExtensionInstalled(provider) && !isExtensionEnabled(provider)) throw new Error(`Extension "${provider}" is paused — enable it in Settings → Extensions`);
+        throw new Error(`Unknown board provider "${provider}"`);
+      }
+      const s = feedSettings();
+      return fetchExtension(provider, token, extensionContext(() => {}, s)) as Promise<Posting[]>;
+    }
   }
 }
 
@@ -320,6 +341,9 @@ export async function fetchAggregator(name: string, keywords: string[], opts: { 
     }
     return out;
   }
+  const ext = getExtension(name);
+  if (ext?.fetch && ext.kind === "aggregator") return fetchExtension(name, "", extensionContext(() => {}, { keywords, locations: opts.locations })) as Promise<Posting[]>;
+  if (isExtensionInstalled(name) && !isExtensionEnabled(name)) throw new Error(`Extension "${name}" is paused — enable it in Settings → Extensions`);
   throw new Error(`Unknown aggregator "${name}"`);
 }
 
@@ -444,7 +468,7 @@ export function markSeen(ids: number[]) {
 }
 
 export function listFeed(status: string | null = null) {
-  const where = status ? "WHERE status = ?" : "WHERE status NOT IN ('dismissed', 'hidden')";
+  const where = status ? "WHERE status = ?" : "WHERE status NOT IN ('dismissed', 'hidden', 'tracked', 'deleted')";
   return db.prepare(`SELECT id, source, company, title, title_en, lang, level, location, remote, salary, url, posted_at, fit_score, fit_reason, ats_pct, ats_missing, seen, status, application_id, created_at, length(description) AS desc_len, substr(description, 1, 700) AS excerpt FROM feed_items ${where} ORDER BY (fit_score IS NULL), fit_score DESC, ats_pct DESC, posted_at DESC, id DESC LIMIT 500`).all(...(status ? [status] : []));
 }
 export const getFeedItem = (id: number) => db.prepare("SELECT * FROM feed_items WHERE id = ?").get(id) as any;

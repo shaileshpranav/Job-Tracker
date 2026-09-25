@@ -126,7 +126,17 @@ Filters apply to what is already in the feed, not just to new fetches: saving th
 
 Scoring is two-stage: every new posting is **keyword-screened** against your base resume(s) for free (deterministic ATS coverage, shown as a % chip with the missing terms); only postings above the coverage floor go to the **Feed triage** model, best-covered first, up to a per-refresh cap. Score ≥ threshold → **🔥 Hot**; the nav badge counts hot postings you haven't looked at yet. Each row has a **Preview** of the description; **Track** creates a full application (extraction + fit) and links back; bulk actions **Track all hot**, **Dismiss below threshold**, **Dismiss screened-out**. Stale items are purged automatically. Refresh by hand or every N hours.
 
-Storage folders can be moved with `DATA_DIR`, `APPLICATIONS_DIR`, `PROFILE_DIR` in `.env` (handy for a second instance or a synced folder).
+Storage folders can be moved with `DATA_DIR`, `APPLICATIONS_DIR`, `PROFILE_DIR`, `EXTENSIONS_DIR` in `.env` (handy for a second instance or a synced folder).
+
+## Extensions
+
+The bundled feed sources are deliberately limited to official, public JSON endpoints — no HTML scraping, nothing behind a `robots.txt` opt-out. That keeps the shipped sources honest, but it also rules out plenty of real boards: internal APIs, sites that only render HTML, your employer's private board.
+
+**Extensions** are the escape hatch, and the rules there are yours. An extension is a `.ts` file you drop into `extensions/`; it can add a **company board** (configured as `<id>:<token>` like any other), an **aggregator** (a checkbox in the feed settings), and/or take over **capture** for posting URLs it recognises — going straight to an API instead of the generic fetch-and-parse path. Everything downstream is unchanged: the same filters, deduplication, keyword screen and fit scoring apply.
+
+They run **in the server process**, with the same access the app itself has — your applications, your database, your saved API keys. Installing one is equivalent to editing `src/` yourself, so only install extensions you have read. A file that fails to load is reported under **Settings → Extensions** and never takes the server down.
+
+`extensions/README.md` has the full contract, the helpers an extension gets handed, and two worked examples in `extensions/examples/` — a real one (We Work Remotely, whose feeds are public but XML rather than JSON, which is exactly why it lives out here) and an annotated board + capture template.
 
 ## Applying
 

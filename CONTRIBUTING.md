@@ -49,7 +49,9 @@ obvious from the code. Some patterns worth matching rather than reinventing:
 - Bug fixes, especially in the ATS scraping/feed-source parsing, LaTeX rendering, or the autofill
   bookmarklet's field-matching, which are the fiddliest and most site-specific parts of the app.
 - New job-feed sources or company-board resolvers (`src/feed.ts`) that use official JSON endpoints,
-  not HTML scraping — that constraint is deliberate (see "Job feed" in `README.md`).
+  not HTML scraping — that constraint is deliberate (see "Job feed" in `README.md`). A source that
+  can't meet it belongs in an extension (`extensions/README.md`), which is exactly what they're for;
+  improvements to the extension API itself are welcome in-tree.
 - Additional LLM providers behind the existing `Provider`/`TASKS` abstraction in `src/settings.ts`
   and `src/llm.ts`.
 

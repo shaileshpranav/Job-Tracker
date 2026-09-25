@@ -7,7 +7,8 @@ import path from "node:path";
 import { db, getApp, logEvent, saveDocument, slugify, touch, APPS_DIR, PROFILE_DIR, type Application } from "./db.ts";
 import { captureFromUrl, CaptureBlocked } from "./scrape.ts";
 import { extractJob, tailorResume, condenseResume, looksTooLong, writeCoverLetter, answerQuestions, reviseAnswer, scoreFit, learnStyle, interviewPrep, quickFit, translateTitles, translateJob, type JobExtract } from "./ai.ts";
-import { feedSettings, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, matchesLevel, classifyLevel, detectLang, isExcluded, isFresh, insertNew, purgeStale, applyFilters, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, AGGREGATORS, type Aggregator, type Posting } from "./feed.ts";
+import { feedSettings, aggregatorList, fetchBoard, fetchAggregator, matchesKeywords, matchesLocation, matchesLevel, classifyLevel, detectLang, isExcluded, isFresh, insertNew, purgeStale, applyFilters, unscoredIds, unscreenedIds, getFeedItem, markFeedRefreshed, type Posting } from "./feed.ts";
+import { getExtension, isExtensionEnabled } from "./extensions.ts";
 import { atsCheck } from "./ats.ts";
 import { compilePdf } from "./latex.ts";
 import { registerJob, enqueue, NeedsYou } from "./queue.ts";
@@ -128,10 +129,28 @@ function screenItem(id: number, bases: { key: string; md: string }[]) {
   db.prepare("UPDATE feed_items SET ats_pct = ?, ats_missing = ? WHERE id = ?").run(best.pct, JSON.stringify(best.missing), id);
 }
 
-registerJob("feed_refresh", async (_p, _job, progress) => {
+registerJob("feed_refresh", async (p: { extensionId?: string } = {}, _job, progress) => {
   const s = feedSettings();
   const aggOpts = { locations: s.locations, adzuna: s.adzuna };
-  const sources = [...s.boards.map((b) => ({ name: b, run: () => fetchBoard(b) })), ...(Object.keys(AGGREGATORS) as Aggregator[]).filter((a) => s.aggregators[a]).map((a) => ({ name: a, run: () => fetchAggregator(a, s.keywords, aggOpts) }))];
+  let sources: { name: string; run: () => Promise<Posting[]> }[];
+  if (p.extensionId) {
+    // Scoped pull: only this extension's sources, ignoring the paused/enabled state of everything else.
+    const ext = getExtension(p.extensionId);
+    if (!ext) throw new Error(`Extension "${p.extensionId}" isn't loaded — check it's installed and enabled in Settings → Extensions`);
+    if (ext.kind === "board") {
+      sources = s.boards.filter((b) => b.split(":")[0] === ext.id).map((b) => ({ name: b, run: () => fetchBoard(b) }));
+      if (!sources.length) throw new Error(`No boards configured for "${ext.label}" yet — add one as ${ext.id}:<token> in the feed settings first`);
+    } else if (ext.kind === "aggregator") {
+      sources = [{ name: ext.id, run: () => fetchAggregator(ext.id, s.keywords, aggOpts) }];
+    } else {
+      throw new Error(`"${ext.label}" doesn't fetch postings (it only handles capture)`);
+    }
+  } else {
+    sources = [
+      ...s.boards.filter((b) => isExtensionEnabled(b.split(":")[0])).map((b) => ({ name: b, run: () => fetchBoard(b) })),
+      ...Object.keys(aggregatorList()).filter((a) => s.aggregators[a] && isExtensionEnabled(a)).map((a) => ({ name: a, run: () => fetchAggregator(a, s.keywords, aggOpts) })),
+    ];
+  }
   if (!sources.length) throw new Error("No sources configured — add company boards or enable an aggregator in the feed settings");
   const report: Record<string, string> = {};
   const kept: Posting[] = [];
@@ -162,7 +181,7 @@ registerJob("feed_refresh", async (_p, _job, progress) => {
   const added = insertNew(kept);
   const purged = purgeStale(s.maxAgeDays);
   const { hidden, restored } = applyFilters(s); // settings may have changed since these items arrived
-  markFeedRefreshed();
+  if (!p.extensionId) markFeedRefreshed(); // a scoped single-extension pull isn't "the feed was refreshed" for auto-refresh purposes
   let scored = 0, hot = 0, screened = 0;
   const bases = hasAnyResume() ? await loadBases() : [];
   if (bases.length) {

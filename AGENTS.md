@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Commands
 
@@ -115,16 +115,6 @@ generic path. The bundled sources stay JSON-only on purpose — extensions are t
 hatch for anything that can't meet that bar, so new scraper-shaped sources belong there, not in
 `feed.ts`. Note `scrape.ts` imports `extensions.ts` dynamically: the dependency runs the other way
 statically (extensions needs `htmlToText`/`jobPostingFromJsonLd`), and this avoids the cycle.
-
-Installing one still means dropping a file in and restarting, but management after that is live, no
-restart: an extension can be **paused** (persisted in `settings` under `extensions:disabled`; skipped
-by `getExtension`/`matchExtensionBoard`/`captureViaExtension` but still counted by `boardExtensionIds`
-so a pause can't silently strip a saved `provider:token` out of feed settings) or **removed** (deletes
-the file, calls `load()` again). `feed_refresh` also takes an optional `extensionId` in its job payload
-to pull from just that one extension's source(s) on demand, bypassing the enabled aggregator toggles
-and boards list filtering everything else uses — this scoped pull does not update `feed:lastRefresh`,
-so it never perturbs the auto-refresh schedule. All of this is exposed under Settings → Extensions and
-`/api/extensions*`.
 
 ### Feed (`feed.ts`)
 
