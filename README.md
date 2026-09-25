@@ -10,6 +10,20 @@ Local job-application tracker with Claude doing the repetitive work:
 - **Answer** — paste the form's questions; answers are drafted from your profile and reuse what you've said on earlier applications. Rewrite any saved answer afterward with **Shorten**, **Expand**, or a typed instruction ("more specific", "less formal").
 - **Track** — status pipeline, applied date, notes, timeline. Everything is also mirrored as Markdown under `applications/`.
 
+![An application with its fit score, requirements and pipeline status](docs/screenshots/application.png)
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Home dashboard](docs/screenshots/home.png)<br>**Home**: today's numbers, follow-ups due, recent activity | ![Job feed](docs/screenshots/feed.png)<br>**Feed**: postings from company boards and aggregators, scored for fit |
+| ![Tailored resume](docs/screenshots/resume.png)<br>**Resume**: a tailored version per application, with an ATS keyword check | ![Application answers](docs/screenshots/questions.png)<br>**Questions**: drafted answers you can rewrite, copy or autofill |
+| ![Goals and achievements](docs/screenshots/goals.png)<br>**Goals**: daily, weekly and monthly targets, streaks and achievements | ![Dark mode](docs/screenshots/application-dark.png)<br>**Dark mode** follows your system setting or the toggle |
+
+<p align="center"><img src="docs/screenshots/mobile-home.png" alt="The application list on a phone" width="300"><br><em>On a phone</em></p>
+
+<sub>Screenshots use made-up sample data.</sub>
+
 ## Setup
 
 ```bash
@@ -224,6 +238,7 @@ src/
   markdown.ts   print-ready HTML (browser-print fallback)
 templates/      resume.tex, letter.tex — edit to restyle
   public/       UI
+docs/screenshots/  README images (sample data)
 ```
 
 ## Notes
