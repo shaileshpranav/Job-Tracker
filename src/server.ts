@@ -20,7 +20,7 @@ import { LOGIN_PAGE, isAuthed, isPublicRoute, setSessionCookie, clearSessionCook
 import { buildPdf, isLatexReady, letterHeader, writeJobFile, writeQuestionsFile } from "./documents.ts";
 import { hostOf, createApplication } from "./jobs.ts";
 import { autofillBookmarklet, candidateContact, siteKey } from "./autofill.ts";
-import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, applyFilters, aggregatorList, isBoardId, boardProviders, LEVELS, LEVEL_LABELS } from "./feed.ts";
+import { feedSettings, saveFeedSettings, feedLastRefresh, listFeed, getFeedItem, feedCounts, fetchBoard, unscoredIds, discoverBoard, markSeen, detectLang, applyFilters, aggregatorList, isBoardId, boardProviders, KNOCKOUT_LIST, LEVELS, LEVEL_LABELS } from "./feed.ts";
 import { extensions, extensionErrors, setExtensionEnabled, removeExtension, EXT_DIR } from "./extensions.ts";
 import { preflight, tasksFor, queueJob } from "./preflight.ts";
 import { pdfFileName, candidateName, DEFAULT_PDF_NAME } from "./filenames.ts";
@@ -396,7 +396,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse) {
   if (m("GET", /^\/api\/feed$/)) {
     const status = url.searchParams.get("status");
     const items = listFeed(status && status !== "open" ? status : null) as any[];
-    const payload = { items, settings: feedSettings(), aggregators: aggregatorList(), levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABELS[l] })), lastRefresh: feedLastRefresh(), counts: feedCounts() };
+    const payload = { items, settings: feedSettings(), aggregators: aggregatorList(), levels: LEVELS.map((l) => ({ key: l, label: LEVEL_LABELS[l] })), knockouts: KNOCKOUT_LIST(), lastRefresh: feedLastRefresh(), counts: feedCounts() };
     if (url.searchParams.get("seen") === "1") markSeen(items.filter((i) => !i.seen).map((i) => i.id)); // viewing the list clears "new"
     return send(res, 200, payload);
   }

@@ -37,6 +37,7 @@ db.exec(`
 const fcols = new Set((db.prepare("PRAGMA table_info(feed_items)").all() as { name: string }[]).map((c) => c.name));
 if (!fcols.has("ats_pct")) db.exec("ALTER TABLE feed_items ADD COLUMN ats_pct INTEGER; ALTER TABLE feed_items ADD COLUMN ats_missing TEXT; ALTER TABLE feed_items ADD COLUMN seen INTEGER NOT NULL DEFAULT 0; ALTER TABLE feed_items ADD COLUMN dedupe_key TEXT");
 if (!fcols.has("level")) db.exec("ALTER TABLE feed_items ADD COLUMN level TEXT; ALTER TABLE feed_items ADD COLUMN lang TEXT; ALTER TABLE feed_items ADD COLUMN title_en TEXT");
+if (!fcols.has("knockout")) db.exec("ALTER TABLE feed_items ADD COLUMN knockout TEXT"); // why a knock-out rule hid it, so the UI can say
 db.exec("CREATE INDEX IF NOT EXISTS feed_items_dedupe ON feed_items(dedupe_key)");
 // Tracked items whose application was deleted should be trackable again, not dead links.
 db.prepare("UPDATE feed_items SET status = 'new', application_id = NULL WHERE status = 'tracked' AND (application_id IS NULL OR application_id NOT IN (SELECT id FROM applications))").run();
@@ -62,6 +63,7 @@ export interface FeedSettings {
   aggregators: Record<string, boolean>;   // built-in ids, plus aggregator-extension ids
   adzuna: { appId: string; appKey: string };
   levels: Level[];           // career levels to keep (empty = all)
+  knockouts: KnockoutKey[];  // rules that hide a posting whose body makes it unapplyable (empty = off)
   autoTranslate: boolean;    // translate non-English titles for matching (and captured postings)
   minScore: number;          // surface as "hot" at or above this
   minAts: number;            // skip model scoring when keyword coverage against every base is below this (%)
@@ -72,7 +74,7 @@ export interface FeedSettings {
 const DEFAULTS: FeedSettings = {
   keywords: [], matchIn: "title", locations: [], exclude: ["intern", "internship", "staffing agency"], boards: [],
   aggregators: { arbeitnow: true, remoteok: true, remotive: true, hn: true, muse: false, himalayas: true, jobicy: false, adzuna: false },
-  adzuna: { appId: "", appKey: "" }, levels: ["junior", "mid", "senior", "staff", "principal", "lead"], autoTranslate: true,
+  adzuna: { appId: "", appKey: "" }, levels: ["junior", "mid", "senior", "staff", "principal", "lead"], knockouts: [], autoTranslate: true,
   minScore: 3, minAts: 15, scorePerRefresh: 20, maxAgeDays: 30, autoHours: 0,
 };
 
@@ -92,6 +94,74 @@ export function classifyLevel(title: string): Level {
   return "mid";
 }
 export const matchesLevel = (level: Level, levels: Level[]) => !levels.length || levels.includes(level);
+
+// ---------- knock-outs: things that make a posting unapplyable, found in the body ----------
+/**
+ * The exclude list only reads the title and location, because that's all it can match reliably.
+ * Eligibility killers — "we cannot sponsor", "EU citizens only", "fluent German required" — live
+ * in the description, usually near the bottom, and are worth catching before a posting takes up a
+ * model call. Every pattern is scoped to one sentence (`[^.!?]`), which is what keeps "no prior
+ * experience needed. We offer visa sponsorship." from tripping the sponsorship rule.
+ *
+ * These hide a posting (reversible, with the reason shown) rather than drop it: the patterns run
+ * over free prose written by humans, so they will occasionally be wrong.
+ */
+/** Phrasing that turns a language from a requirement into a wish — never knock out on a sentence containing one. */
+const SOFTENER = /\b(an?\s+(?:\w+\s+)?(?:plus|bonus|advantage)|plus point|nice[- ]to[- ]have|advantageous|desirable|preferred|optional|beneficial|von vorteil|een pré)\b|\bnot\s+(?:a\s+)?(required|mandatory|essential|necessary|requirement|must)\b/i;
+const lang = (key: string, label: string, english: string, native: string) => ({
+  key, label,
+  hint: `"fluent ${english}", "${english} required", and the equivalent in ${english}`,
+  // Fluency demanded, in English or in the language itself.
+  re: new RegExp(`\\b(fluent|fluency|native|mother ?tongue|business[- ]level|professional working)\\b[^.!?]{0,30}\\b${english}\\b|\\b${english}\\b[^.!?]{0,30}\\b(is (a )?(must|required|mandatory|essential)|required|mandatory|essential|at native level)\\b|\\b(${native})\\b`, "i"),
+  // "Fluent English required, German is a plus" must stay in the feed.
+  unless: SOFTENER,
+});
+export const KNOCKOUTS = [
+  {
+    key: "no_sponsorship", label: "No visa sponsorship",
+    hint: '"we are unable to sponsor", "no visa sponsorship", "must be authorised to work without sponsorship"',
+    // A negation in the same sentence as "sponsor…". Bare "sponsorship" never matches, so
+    // "visa sponsorship available" and "we sponsor visas" stay in the feed.
+    re: /\b(no|not|cannot|can ?not|can'?t|unable|unwilling|without|neither|won'?t|does ?n'?t|do ?n'?t|are ?n'?t|is ?n'?t)\b[^.!?]{0,45}\bsponsor|sponsor\w*\b[^.!?]{0,25}\b(is|are|will|can)? ?(not|no longer|unavailable|unable)\b/i,
+  },
+  {
+    key: "citizens_only", label: "Citizens or permanent residents only",
+    hint: '"EU citizens only", "must be a US citizen", "permanent residents only"',
+    re: /\b(citizens?(hip)?|nationals?|passport holders?|permanent residents?)\b[^.!?]{0,20}\b(only|required|mandatory|is a must)\b|\b(only|must be|must hold)\b[^.!?]{0,30}\b(citizens?|nationals?|permanent residents?)\b/i,
+  },
+  {
+    key: "clearance", label: "Security clearance required",
+    hint: '"security clearance", "SC cleared", "TS/SCI" — normally closed to non-citizens',
+    re: /\b(security clearance|sc cleared|dv cleared|ts\/sci|top secret|public trust|nato (secret|clearance))\b/i,
+  },
+  lang("language_de", "Fluent German required", "german", "fließend deutsch|fliessend deutsch|verhandlungssicher\\w*|deutsch (als )?muttersprach\\w*|sehr gute deutschkenntnisse"),
+  lang("language_nl", "Fluent Dutch required", "dutch", "vloeiend[^.!?]{0,15}nederlands|nederlands is een vereiste|uitstekende beheersing van het nederlands"),
+  lang("language_da", "Fluent Danish required", "danish", "flydende[^.!?]{0,15}dansk|dansk på modersmålsniveau"),
+  lang("language_fr", "Fluent French required", "french", "fran\u00e7ais courant|courant en fran\u00e7ais|ma\u00eetrise du fran\u00e7ais"),
+] as const;
+export type KnockoutKey = (typeof KNOCKOUTS)[number]["key"];
+export const KNOCKOUT_LIST = () => KNOCKOUTS.map(({ key, label, hint }) => ({ key, label, hint }));
+
+/**
+ * The label of the first active rule this posting trips, or null. Needs text to judge from.
+ * Judged one sentence (or bullet) at a time: a requirement and the phrase that softens it are
+ * almost always in the same breath, and matching across a whole description reads
+ * "Fluent English required, German is a plus" as a German requirement.
+ */
+export function knockoutReason(p: Pick<Posting, "title" | "description"> & { title_en?: string | null }, keys: readonly string[]): string | null {
+  if (!keys.length) return null;
+  const raw = [p.title, p.title_en, p.description].filter(Boolean).join("\n");
+  if (!raw.trim()) return null;
+  // Several sources hand back HTML; tags would both hide sentence breaks and offer attribute text to match on.
+  const hay = /<[a-z!/][^>]*>/i.test(raw) ? htmlToText(raw) : raw;
+  const sentences = hay.match(/[^.!?\n]+/g) ?? [];
+  for (const k of KNOCKOUTS) {
+    if (!keys.includes(k.key)) continue;
+    const unless = (k as { unless?: RegExp }).unless;
+    if (sentences.some((line) => !unless?.test(line) && k.re.test(line))) return k.label;
+  }
+  return null;
+}
 
 // ---------- language (cheap heuristic, good enough to decide whether to translate) ----------
 const LANG_HINTS: [string, RegExp][] = [
@@ -146,6 +216,7 @@ export function saveFeedSettings(input: Partial<Record<keyof FeedSettings, unkno
     aggregators: Object.fromEntries(aggKeys.map((k) => [k, agg[k] !== undefined ? Boolean(agg[k]) : Boolean(cur.aggregators[k])])),
     adzuna: { appId: adz.appId !== undefined ? String(adz.appId).trim() : cur.adzuna.appId, appKey: adz.appKey !== undefined ? String(adz.appKey).trim() : cur.adzuna.appKey },
     levels: input.levels !== undefined ? (Array.isArray(input.levels) ? input.levels : list(input.levels)).map(String).filter((l): l is Level => (LEVELS as readonly string[]).includes(l)) : cur.levels,
+    knockouts: input.knockouts !== undefined ? (Array.isArray(input.knockouts) ? input.knockouts : list(input.knockouts)).map(String).filter((k): k is KnockoutKey => KNOCKOUTS.some((x) => x.key === k)) : cur.knockouts,
     autoTranslate: input.autoTranslate !== undefined ? Boolean(input.autoTranslate) : cur.autoTranslate,
     minScore: input.minScore !== undefined ? Math.max(1, Math.min(5, num(input.minScore, cur.minScore, 5))) : cur.minScore,
     minAts: input.minAts !== undefined ? num(input.minAts, cur.minAts, 100) : cur.minAts,
@@ -432,18 +503,21 @@ export function isExcluded(p: Posting, exclude: string[]) {
  * keep their scores and come back automatically; they are not dismissed.
  */
 export function applyFilters(s = feedSettings()) {
-  const rows = db.prepare("SELECT id, status, title, title_en, location, remote, level, description FROM feed_items WHERE status IN ('new', 'hidden')").all() as any[];
-  const hide = db.prepare("UPDATE feed_items SET status = 'hidden' WHERE id = ?"), show = db.prepare("UPDATE feed_items SET status = 'new' WHERE id = ?");
-  let hidden = 0, restored = 0;
+  const rows = db.prepare("SELECT id, status, title, title_en, location, remote, level, description, knockout FROM feed_items WHERE status IN ('new', 'hidden')").all() as any[];
+  const hide = db.prepare("UPDATE feed_items SET status = 'hidden', knockout = ? WHERE id = ?"), show = db.prepare("UPDATE feed_items SET status = 'new', knockout = NULL WHERE id = ?");
+  const reason = db.prepare("UPDATE feed_items SET knockout = ? WHERE id = ?");
+  let hidden = 0, restored = 0, knocked = 0;
   for (const r of rows) {
     const p = { title: r.title, title_en: r.title_en, location: r.location ?? "", remote: !!r.remote, description: r.description ?? "" } as Posting;
-    const ok = matchesLocation(p, s.locations) && !isExcluded(p, s.exclude)
+    const knockout = knockoutReason(p, s.knockouts);
+    const ok = !knockout && matchesLocation(p, s.locations) && !isExcluded(p, s.exclude)
       && matchesLevel((r.level as Level) || classifyLevel(r.title_en || r.title), s.levels)
       && matchesKeywords(r.title_en || r.title, s.keywords, s.matchIn === "text" ? p.description : "");
-    if (!ok && r.status === "new") { hide.run(r.id); hidden++; }
+    if (!ok && r.status === "new") { hide.run(knockout, r.id); hidden++; if (knockout) knocked++; }
     else if (ok && r.status === "hidden") { show.run(r.id); restored++; }
+    else if (!ok && r.knockout !== knockout) reason.run(knockout, r.id); // already hidden, but for a different reason now
   }
-  return { hidden, restored };
+  return { hidden, restored, knocked };
 }
 
 // ---------- store ----------
@@ -474,7 +548,7 @@ export function markSeen(ids: number[]) {
 
 export function listFeed(status: string | null = null) {
   const where = status ? "WHERE status = ?" : "WHERE status NOT IN ('dismissed', 'hidden', 'tracked', 'deleted')";
-  return db.prepare(`SELECT id, source, company, title, title_en, lang, level, location, remote, salary, url, posted_at, fit_score, fit_reason, ats_pct, ats_missing, seen, status, application_id, created_at, length(description) AS desc_len, substr(description, 1, 700) AS excerpt FROM feed_items ${where} ORDER BY (fit_score IS NULL), fit_score DESC, ats_pct DESC, posted_at DESC, id DESC LIMIT 500`).all(...(status ? [status] : []));
+  return db.prepare(`SELECT id, source, company, title, title_en, lang, level, location, remote, salary, url, posted_at, fit_score, fit_reason, ats_pct, ats_missing, seen, status, knockout, application_id, created_at, length(description) AS desc_len, substr(description, 1, 700) AS excerpt FROM feed_items ${where} ORDER BY (fit_score IS NULL), fit_score DESC, ats_pct DESC, posted_at DESC, id DESC LIMIT 500`).all(...(status ? [status] : []));
 }
 export const getFeedItem = (id: number) => db.prepare("SELECT * FROM feed_items WHERE id = ?").get(id) as any;
 /** Unscored items worth a model call: best keyword coverage first, skipping ones below the ATS floor. */
