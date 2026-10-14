@@ -382,6 +382,7 @@ function renderFeed() {
       <div class="feed-main">
         <div class="feed-title">${!i.seen && i.status === "new" ? '<span class="newdot" title="New since you last looked"></span>' : ""}<b title="${i.title_en ? `Original: ${esc(i.title)}` : ""}">${esc(i.title_en || i.title)}</b>${i.title_en ? ` <span class="pill" title="Translated from ${esc((i.lang || "").toUpperCase())} — original: ${esc(i.title)}">${esc((i.lang || "").toUpperCase())} → EN</span>` : i.lang && i.lang !== "en" ? ` <span class="pill warn" title="Not translated">${esc(i.lang.toUpperCase())}</span>` : ""} <span class="muted">at</span> ${esc(i.company)}</div>
         <div class="muted feed-meta">${[i.level ? `<span class="pill">${esc(i.level)}</span>` : "", i.location ? `<span title="${esc(i.location)}">${esc(i.location.length > 60 ? i.location.slice(0, 57) + "…" : i.location)}</span>` : "", i.remote ? "remote" : "", i.salary ? esc(i.salary) : "", i.posted_at || "", `<span class="pill">${esc(i.source)}</span>`, atsChip(i), i.desc_len ? "" : '<span title="The API gave no description; tracking will fetch the page">no text</span>'].filter(Boolean).map((x) => `<span>${x}</span>`).join("")}</div>
+        ${i.knockout ? `<div class="feed-reason"><span class="pill bad">${esc(i.knockout)}</span></div>` : ""}
         ${i.fit_reason ? `<div class="feed-reason">${esc(i.fit_reason)}</div>` : ""}
         ${i.ats_missing && i.fit_score == null ? `<div class="feed-reason">${missing(i)}</div>` : ""}
         ${i.excerpt ? `<details class="feed-more"><summary>Preview</summary><div class="muted" style="white-space:pre-wrap;margin-top:6px">${esc(i.excerpt)}${i.desc_len > 700 ? "…" : ""}</div>${i.ats_missing && i.fit_score != null ? `<div style="margin-top:6px">${missing(i)}</div>` : ""}</details>` : ""}
@@ -406,6 +407,11 @@ function renderFeed() {
           <div class="toolbar" style="margin:6px 0 0"><input id="fDiscover" placeholder="Paste any careers page URL (or company site) to find its board…" style="flex:1"><button id="fDiscoverBtn">Find board</button></div>
           ${state.feedTest ? `<div class="muted" style="margin-top:4px">${state.feedTest.ok ? `✓ <code>${esc(state.feedTest.board)}</code> — ${state.feedTest.count} postings, e.g. ${esc(state.feedTest.sample.join(" · "))}${state.feedTest.guessed ? ` <span class="pill warn">guessed from the domain — check the titles look like this company</span>` : ""} <button data-add-board="${esc(state.feedTest.board)}" style="margin-left:6px">Add</button>` : `<span class="err">✗ ${esc(state.feedTest.error)}</span>`}</div>` : ""}</div>
       </div>
+      <div class="field"><label>Hide postings whose text rules you out <span class="muted">— scanned in the description, not just the title</span></label>
+        <div class="toolbar" style="margin:0;flex-wrap:wrap;row-gap:6px">
+        ${(f.knockouts || []).map((k) => `<label style="display:inline-flex;align-items:center;gap:6px;margin:0" title="${esc(k.hint)}"><input type="checkbox" data-knockout="${esc(k.key)}" ${st.knockouts?.includes(k.key) ? "checked" : ""} style="width:auto">${esc(k.label)}</label>`).join("")}
+        </div>
+        <div class="muted" style="margin-top:4px">Matches are per sentence, so “visa sponsorship available” is safe. Anything caught moves to <b>Hidden by filters</b> with the reason — nothing is deleted, and unticking a rule brings it straight back.</div></div>
       <div class="field"><label>Career levels to keep (classified from the title)</label><div class="toolbar" style="margin:0">
         ${f.levels.map((l) => `<label style="display:inline-flex;align-items:center;gap:6px;margin:0"><input type="checkbox" data-level="${l.key}" ${st.levels.includes(l.key) ? "checked" : ""} style="width:auto">${esc(l.label)}</label>`).join("")}
       </div></div>
@@ -1344,6 +1350,7 @@ function bind() {
       const body = { keywords: $("#fKeywords").value, matchIn: $("[data-matchin].on")?.dataset.matchin || "title", locations: $("#fLocations").value, exclude: $("#fExclude").value, boards: $("#fBoards").value,
         aggregators: Object.fromEntries([...document.querySelectorAll("[data-agg]")].map((c) => [c.dataset.agg, c.checked])),
         levels: [...document.querySelectorAll("[data-level]")].filter((c) => c.checked).map((c) => c.dataset.level),
+        knockouts: [...document.querySelectorAll("[data-knockout]")].filter((c) => c.checked).map((c) => c.dataset.knockout),
         autoTranslate: $("#fTranslate").checked,
         adzuna: { appId: $("#fAdzId")?.value ?? undefined, appKey: $("#fAdzKey")?.value ?? undefined },
         minScore: $("#fMin").value, minAts: $("#fMinAts").value, scorePerRefresh: $("#fCap").value, maxAgeDays: $("#fAge").value, autoHours: $("#fAuto").value };

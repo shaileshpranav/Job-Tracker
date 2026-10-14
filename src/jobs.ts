@@ -180,7 +180,7 @@ registerJob("feed_refresh", async (p: { extensionId?: string } = {}, _job, progr
   }
   const added = insertNew(kept);
   const purged = purgeStale(s.maxAgeDays);
-  const { hidden, restored } = applyFilters(s); // settings may have changed since these items arrived
+  const { hidden, restored, knocked } = applyFilters(s); // settings may have changed since these items arrived
   if (!p.extensionId) markFeedRefreshed(); // a scoped single-extension pull isn't "the feed was refreshed" for auto-refresh purposes
   let scored = 0, hot = 0, screened = 0;
   const bases = hasAnyResume() ? await loadBases() : [];
@@ -205,7 +205,7 @@ registerJob("feed_refresh", async (p: { extensionId?: string } = {}, _job, progr
       }
     }
   }
-  return { added, scored, hot, screened, purged, translated, hidden, restored, report };
+  return { added, scored, hot, screened, purged, translated, hidden, restored, knocked, report };
 });
 
 registerJob("feed_score", async ({ ids }, _job, progress) => {
